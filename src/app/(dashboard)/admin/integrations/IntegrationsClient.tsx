@@ -8,7 +8,7 @@ type Integration = {
   platform: string
   status: string
   lastSyncAt: Date | null
-  metadata: Record<string, string> | null
+  settings: Record<string, string> | null
 }
 
 const PLATFORMS = [

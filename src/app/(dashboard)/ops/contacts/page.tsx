@@ -1,0 +1,103 @@
+import { auth } from '@/lib/auth'
+import Header from '@/components/layout/Header'
+import { mockContactBuckets } from '@/lib/mock-data'
+import { formatNumber } from '@/lib/utils'
+
+const bucketConfig = [
+  {
+    key: 'hot',
+    label: 'Hot',
+    description: 'Highly engaged, ready for sales action',
+    color: 'text-accent-red',
+    bg: 'bg-accent-red/10 border-accent-red/20',
+    icon: 'M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 14.5v-9l6 4.5-6 4.5z',
+  },
+  {
+    key: 'warm',
+    label: 'Warm',
+    description: 'Moderate engagement, nurture active',
+    color: 'text-accent-yellow',
+    bg: 'bg-accent-yellow/10 border-accent-yellow/20',
+    icon: 'M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z',
+  },
+  {
+    key: 'cold',
+    label: 'Cold',
+    description: 'Low recent engagement',
+    color: 'text-pulse-300',
+    bg: 'bg-pulse-blue/8 border-pulse-blue/15',
+    icon: 'M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z',
+  },
+  {
+    key: 'inactive',
+    label: 'Inactive',
+    description: 'No activity in defined window',
+    color: 'text-white/30',
+    bg: 'bg-graphite-700 border-white/5',
+    icon: 'M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 5h2v6h-2zm0 8h2v2h-2z',
+  },
+  {
+    key: 'suppression',
+    label: 'Suppression Candidates',
+    description: 'Bounced, unsubbed, or chronic non-responders',
+    color: 'text-accent-red',
+    bg: 'bg-accent-red/5 border-accent-red/10',
+    icon: 'M12 2C6.47 2 2 6.47 2 12s4.47 10 10 10 10-4.47 10-10S17.53 2 12 2zm5 13.59L15.59 17 12 13.41 8.41 17 7 15.59 10.59 12 7 8.41 8.41 7 12 10.59 15.59 7 17 8.41 13.41 12 17 15.59z',
+  },
+  {
+    key: 'recycle',
+    label: 'Recycle Candidates',
+    description: 'Aged contacts eligible for re-engagement',
+    color: 'text-accent-green',
+    bg: 'bg-accent-green/8 border-accent-green/15',
+    icon: 'M12 6v3l4-4-4-4v3c-4.42 0-8 3.58-8 8 0 1.57.46 3.03 1.24 4.26L6.7 14.8c-.45-.83-.7-1.79-.7-2.8 0-3.31 2.69-6 6-6zm6.76 1.74L17.3 9.2c.44.84.7 1.79.7 2.8 0 3.31-2.69 6-6 6v-3l-4 4 4 4v-3c4.42 0 8-3.58 8-8 0-1.57-.46-3.03-1.24-4.26z',
+  },
+] as const
+
+export default async function ContactsPage() {
+  const session = await auth()
+
+  const buckets = mockContactBuckets as Record<string, number>
+
+  return (
+    <div className="flex flex-col min-h-full">
+      <Header
+        title="Contact Intelligence"
+        subtitle="Audience health, engagement buckets, suppression and recycle candidates"
+        userName={session?.user?.name}
+        userRole={session?.user?.role!}
+      />
+
+      <div className="p-6 space-y-6">
+        {/* Bucket cards */}
+        <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
+          {bucketConfig.map((b) => (
+            <div key={b.key} className={`rounded-xl border p-5 ${b.bg}`}>
+              <div className="flex items-start justify-between mb-3">
+                <p className={`text-xs font-mono uppercase tracking-widest ${b.color}`}>{b.label}</p>
+                <svg className={`w-4 h-4 ${b.color} opacity-60`} viewBox="0 0 24 24" fill="currentColor">
+                  <path d={b.icon} />
+                </svg>
+              </div>
+              <p className="text-white font-bold text-3xl mb-1">{formatNumber(buckets[b.key])}</p>
+              <p className="text-white/30 text-xs">{b.description}</p>
+            </div>
+          ))}
+        </div>
+
+        {/* Notice */}
+        <div className="bg-graphite-800 border border-white/5 rounded-xl p-5 flex gap-4 items-start">
+          <svg className="w-5 h-5 text-pulse-blue shrink-0 mt-0.5" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z" />
+          </svg>
+          <div>
+            <p className="text-white text-sm font-medium mb-1">Phase 0 Required for Contact Scoring</p>
+            <p className="text-white/40 text-sm leading-relaxed">
+              Contact buckets are currently based on preliminary rules. Once Phase 0 discovery is complete and field definitions (engaged contact, inactivity window) are admin-approved, scoring will update automatically with confirmed logic.
+            </p>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}

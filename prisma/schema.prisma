@@ -1,0 +1,280 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ─── Auth ────────────────────────────────────────────────────────────────────
+
+enum Role {
+  SUPER_ADMIN
+  ADMIN
+  EXECUTIVE
+  NURTURE_OPS
+  SALES_LEADERSHIP
+}
+
+model User {
+  id         String   @id @default(cuid())
+  name       String?
+  email      String   @unique
+  password   String?
+  role       Role     @default(NURTURE_OPS)
+  active     Boolean  @default(true)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  aiInsights AiInsight[]
+}
+
+// ─── Integration Config ───────────────────────────────────────────────────────
+
+model Integration {
+  id             String    @id @default(cuid())
+  platform       String    @unique // "salesforce" | "pardot"
+  status         String    @default("disconnected")
+  instanceUrl    String?
+  accessToken    String?
+  refreshToken   String?
+  tokenExpiresAt DateTime?
+  lastSyncAt     DateTime?
+  syncStatus     String?
+  errorMessage   String?
+  settings       Json?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+}
+
+// ─── Field Mappings & Definitions ────────────────────────────────────────────
+
+model FieldMapping {
+  id              String    @id @default(cuid())
+  concept         String    // "MQL" | "SQL" | "discovery_call" | "engaged_contact" | "attribution"
+  platform        String    // "salesforce" | "pardot"
+  object          String
+  fieldApiName    String?
+  detectedLogic   String?   @db.Text
+  confidenceScore Float?
+  status          String    @default("pending") // "pending" | "approved" | "rejected"
+  approvedAt      DateTime?
+  approvedById    String?
+  version         Int       @default(1)
+  notes           String?   @db.Text
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+}
+
+// ─── Benchmark / Threshold Settings ──────────────────────────────────────────
+
+model Benchmark {
+  id                String   @id @default(cuid())
+  metric            String   @unique
+  warningThreshold  Float?
+  criticalThreshold Float?
+  inactivityDays    Int?
+  suppressionRules  Json?
+  recycleRules      Json?
+  updatedAt         DateTime @updatedAt
+}
+
+// ─── Sync Jobs ────────────────────────────────────────────────────────────────
+
+model SyncJob {
+  id           String    @id @default(cuid())
+  platform     String
+  objectType   String
+  status       String    @default("pending")
+  recordCount  Int?
+  startedAt    DateTime?
+  completedAt  DateTime?
+  errorMessage String?   @db.Text
+  createdAt    DateTime  @default(now())
+}
+
+// ─── Modeled Entities ─────────────────────────────────────────────────────────
+
+model Contact {
+  id               String    @id @default(cuid())
+  externalId       String?   @unique
+  email            String?
+  firstName        String?
+  lastName         String?
+  company          String?
+  industry         String?
+  segment          String?
+  region           String?
+  lifecycleStage   String?
+  contactStatus    String?
+  engagementScore  Float?
+  bucket           String?   // "hot" | "warm" | "cold" | "inactive"
+  lastActivityAt   DateTime?
+  enteredNurtureAt DateTime?
+  mqlAt            DateTime?
+  sqlAt            DateTime?
+  discoveryCallAt  DateTime?
+  opportunityAt    DateTime?
+  wonAt            DateTime?
+  ownerId          String?
+  source           String?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  emailEvents     EmailEvent[]
+  lifecycleEvents LifecycleEvent[]
+}
+
+model Sequence {
+  id         String   @id @default(cuid())
+  externalId String?  @unique
+  name       String
+  platform   String   @default("pardot")
+  status     String?
+  type       String?
+  segment    String?
+  industry   String?
+  leadMagnet String?
+  stepCount  Int?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  steps      NurtureStep[]
+  emailSends EmailSend[]
+}
+
+model NurtureStep {
+  id         String   @id @default(cuid())
+  sequenceId String
+  sequence   Sequence @relation(fields: [sequenceId], references: [id])
+  stepNumber Int
+  subject    String?
+  assetType  String?
+  createdAt  DateTime @default(now())
+
+  emailSends EmailSend[]
+}
+
+model EmailSend {
+  id              String       @id @default(cuid())
+  externalId      String?      @unique
+  sequenceId      String?
+  sequence        Sequence?    @relation(fields: [sequenceId], references: [id])
+  stepId          String?
+  step            NurtureStep? @relation(fields: [stepId], references: [id])
+  subject         String?
+  sentAt          DateTime?
+  totalSent       Int          @default(0)
+  totalDelivered  Int          @default(0)
+  totalHardBounce Int          @default(0)
+  totalSoftBounce Int          @default(0)
+  uniqueOpens     Int          @default(0)
+  uniqueClicks    Int          @default(0)
+  unsubscribes    Int          @default(0)
+  spamComplaints  Int          @default(0)
+  createdAt       DateTime     @default(now())
+
+  events EmailEvent[]
+}
+
+model EmailEvent {
+  id         String    @id @default(cuid())
+  sendId     String
+  send       EmailSend @relation(fields: [sendId], references: [id])
+  contactId  String?
+  contact    Contact?  @relation(fields: [contactId], references: [id])
+  eventType  String    // "open" | "click" | "bounce" | "unsubscribe" | "spam"
+  occurredAt DateTime
+  metadata   Json?
+}
+
+model Campaign {
+  id         String    @id @default(cuid())
+  externalId String?   @unique
+  name       String
+  type       String?
+  status     String?
+  startDate  DateTime?
+  endDate    DateTime?
+  leadMagnet String?
+  segment    String?
+  industry   String?
+  createdAt  DateTime  @default(now())
+}
+
+model Opportunity {
+  id                String    @id @default(cuid())
+  externalId        String?   @unique
+  contactId         String?
+  accountName       String?
+  industry          String?
+  stage             String?
+  amount            Float?
+  closeDate         DateTime?
+  isWon             Boolean   @default(false)
+  isClosed          Boolean   @default(false)
+  nurtureInfluenced Boolean   @default(false)
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+}
+
+model LifecycleEvent {
+  id         String   @id @default(cuid())
+  contactId  String
+  contact    Contact  @relation(fields: [contactId], references: [id])
+  fromStage  String?
+  toStage    String
+  occurredAt DateTime
+  source     String?
+}
+
+// ─── Performance Snapshots ────────────────────────────────────────────────────
+
+model PerformanceSnapshot {
+  id               String   @id @default(cuid())
+  snapshotDate     DateTime
+  period           String   // "daily" | "weekly" | "monthly"
+  totalSent        Int?
+  totalDelivered   Int?
+  totalBounces     Int?
+  uniqueOpens      Int?
+  uniqueClicks     Int?
+  unsubscribes     Int?
+  spamComplaints   Int?
+  totalAudience    Int?
+  engagedAudience  Int?
+  mqls             Int?
+  sqls             Int?
+  discoveryCalls   Int?
+  opportunities    Int?
+  wonOpportunities Int?
+  pipelineValue    Float?
+  wonRevenue       Float?
+  createdAt        DateTime @default(now())
+}
+
+// ─── AI Insights ──────────────────────────────────────────────────────────────
+
+model AiInsight {
+  id        String   @id @default(cuid())
+  type      String   // "executive_summary" | "ops_summary" | "anomaly" | "recommendation"
+  audience  String   // "executive" | "ops" | "sales"
+  content   String   @db.Text
+  period    String?
+  approved  Boolean  @default(false)
+  userId    String?
+  user      User?    @relation(fields: [userId], references: [id])
+  createdAt DateTime @default(now())
+}
+
+// ─── Discovery Report (Phase 0) ───────────────────────────────────────────────
+
+model DiscoveryReport {
+  id              String    @id @default(cuid())
+  status          String    @default("pending")
+  rawAudit        Json?
+  detectedObjects Json?
+  dataGaps        Json?
+  completedAt     DateTime?
+  createdAt       DateTime  @default(now())
+}

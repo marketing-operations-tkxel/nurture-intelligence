@@ -1,26 +1,82 @@
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
-
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+
+  /* Tkxel Primary Palette */
+  --color-pulse-blue: #2952FF;
+  --color-system-blue: #10347E;
+  --color-graphite: #0F1729;
+  --color-clear-space: #FFFFFF;
+
+  /* Graphite shades (dark UI surfaces) */
+  --color-graphite-900: #0F1729;
+  --color-graphite-800: #151F36;
+  --color-graphite-700: #1C2845;
+  --color-graphite-600: #243154;
+  --color-graphite-500: #2D3A63;
+
+  /* Pulse blue scale */
+  --color-pulse-50: #E8EEFC;
+  --color-pulse-100: #D0DDF9;
+  --color-pulse-200: #A2BCF1;
+  --color-pulse-300: #739AEC;
+  --color-pulse-400: #4679E5;
+  --color-pulse-500: #2952FF;
+  --color-pulse-600: #1A51CA;
+  --color-pulse-700: #1747B3;
+  --color-pulse-800: #10347E;
+  --color-pulse-900: #0D2D71;
+
+  /* Chart / tertiary blues */
+  --color-chart-1: #3169E3;
+  --color-chart-2: #4679E5;
+  --color-chart-3: #5C8AE9;
+  --color-chart-4: #739AEC;
+  --color-chart-5: #8AABEE;
+  --color-chart-6: #A2BCF1;
+
+  /* Accent (minimal use) */
+  --color-accent-red: #FF3B5C;
+  --color-accent-green: #00C875;
+  --color-accent-yellow: #FFB400;
+
+  /* Brand fonts — injected via CSS vars from next/font in layout.tsx */
+  --font-sans: var(--font-jakarta), sans-serif;
+  --font-mono: var(--font-ibm-mono), monospace;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+:root {
+  --background: #0F1729;
+  --foreground: #F0F4FF;
+}
+
+* {
+  box-sizing: border-box;
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-jakarta), sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: #151F36; }
+::-webkit-scrollbar-thumb { background: #2D3A63; border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: #2952FF; }
+
+/* Core Flow gradient utilities */
+.gradient-core-flow {
+  background: linear-gradient(135deg, #2952FF 0%, #10347E 100%);
+}
+.gradient-core-flow-text {
+  background: linear-gradient(135deg, #2952FF 0%, #739AEC 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
 }

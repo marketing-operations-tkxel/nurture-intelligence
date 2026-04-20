@@ -24,9 +24,13 @@ async function validateSalesforce(creds: Record<string, string>): Promise<{ erro
 
   try {
     const conn = new jsforce.Connection({
-      loginUrl: 'https://login.salesforce.com',
+      loginUrl: instanceUrl.replace(/\/$/, ''),
     })
-    await conn.login(username, passwordWithToken)
+    const loginPromise = conn.login(username, passwordWithToken)
+    const timeoutPromise = new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error('Login timed out after 15s')), 15000)
+    )
+    await Promise.race([loginPromise, timeoutPromise])
     return { error: null, accessToken: conn.accessToken ?? undefined, instanceUrl: conn.instanceUrl }
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err)
@@ -51,21 +55,31 @@ async function validatePardot(settings: Record<string, string>) {
     return { error: 'Connect Salesforce first — Pardot uses the same Salesforce session.' }
   }
 
-  // Probe the Pardot API using the Salesforce access token
+  // Probe the Pardot API using the Salesforce access token (10s timeout)
   try {
-    const pardotRes = await fetch('https://pi.pardot.com/api/v5/objects/emails?fields=id&limit=1', {
-      headers: {
-        Authorization: `Bearer ${sfAccessToken}`,
-        'Pardot-Business-Unit-Id': businessUnitId,
-      },
-    })
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), 10000)
+
+    let pardotRes: Response
+    try {
+      pardotRes = await fetch('https://pi.pardot.com/api/v5/objects/lists?fields=id&limit=1', {
+        headers: {
+          Authorization: `Bearer ${sfAccessToken}`,
+          'Pardot-Business-Unit-Id': businessUnitId,
+        },
+        signal: controller.signal,
+      })
+    } finally {
+      clearTimeout(timer)
+    }
 
     if (!pardotRes.ok) {
       const errText = await pardotRes.text().catch(() => pardotRes.statusText)
       return { error: `Pardot API error (${pardotRes.status}): ${errText}. Verify your Business Unit ID is correct.` }
     }
-  } catch {
-    return { error: 'Could not reach pi.pardot.com. Check your network and try again.' }
+  } catch (err) {
+    const isTimeout = err instanceof Error && err.name === 'AbortError'
+    return { error: isTimeout ? 'Pardot API timed out. Check your Business Unit ID and try again.' : 'Could not reach pi.pardot.com. Check your network and try again.' }
   }
 
   return { error: null, accessToken: sfAccessToken }

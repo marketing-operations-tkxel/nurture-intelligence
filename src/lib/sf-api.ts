@@ -1,5 +1,5 @@
 // Shared Salesforce REST API + Pardot API helpers
-// Uses stored credentials from the Integration table — no OAuth refresh
+// Auto-refreshes the SF access token when it expires using stored username/password
 
 import { prisma } from '@/lib/prisma'
 
@@ -15,14 +15,56 @@ export interface PardotCreds {
   businessUnitId: string
 }
 
+// ─── Token refresh ────────────────────────────────────────────────────────────
+
+async function refreshSfToken(s: Record<string, string>): Promise<SfCreds | null> {
+  if (!s.username || !s.passwordWithToken) return null
+  try {
+    const jsforce = await import('jsforce')
+    const conn = new jsforce.default.Connection({
+      loginUrl: (s.instanceUrl ?? 'https://login.salesforce.com').replace(/\/$/, ''),
+    })
+    await conn.login(s.username, s.passwordWithToken)
+    const newToken = conn.accessToken
+    const newInstanceUrl = conn.instanceUrl
+    if (!newToken || !newInstanceUrl) return null
+
+    // Persist the fresh token so next call doesn't re-login
+    await prisma.integration.update({
+      where: { platform: 'salesforce' },
+      data: { settings: { ...s, accessToken: newToken, instanceUrl: newInstanceUrl } },
+    })
+    return { accessToken: newToken, instanceUrl: newInstanceUrl }
+  } catch {
+    return null
+  }
+}
+
 // ─── Load credentials from DB ─────────────────────────────────────────────────
 
 export async function getSfCreds(): Promise<SfCreds | null> {
   const integration = await prisma.integration.findUnique({ where: { platform: 'salesforce' } })
   if (integration?.status !== 'connected') return null
   const s = integration.settings as Record<string, string> | null
-  if (!s?.accessToken || !s?.instanceUrl) return null
-  return { accessToken: s.accessToken, instanceUrl: s.instanceUrl }
+  if (!s) return null
+  if (!s.accessToken || !s.instanceUrl) return null
+
+  // Quick token health check (5s timeout)
+  try {
+    const checkRes = await fetch(
+      `${s.instanceUrl}/services/data/${SF_API_VERSION}/sobjects/Lead/describe`,
+      {
+        headers: { Authorization: `Bearer ${s.accessToken}` },
+        signal: AbortSignal.timeout(5000),
+      }
+    )
+    if (checkRes.ok) return { accessToken: s.accessToken, instanceUrl: s.instanceUrl }
+  } catch {
+    // network error — fall through to refresh
+  }
+
+  // Token expired or invalid — re-login with stored credentials
+  return refreshSfToken(s)
 }
 
 export async function getPardotCreds(): Promise<PardotCreds | null> {
@@ -31,12 +73,16 @@ export async function getPardotCreds(): Promise<PardotCreds | null> {
     prisma.integration.findUnique({ where: { platform: 'pardot' } }),
   ])
   if (pardot?.status !== 'connected') return null
-  const sfSettings = sf?.settings as Record<string, string> | null
+
+  // Always use a fresh SF token for Pardot calls
+  const freshSf = await getSfCreds()
+  if (!freshSf) return null
+
   const pardotSettings = pardot.settings as Record<string, string> | null
-  const accessToken = sfSettings?.accessToken
   const businessUnitId = pardotSettings?.businessUnitId
-  if (!accessToken || !businessUnitId) return null
-  return { accessToken, businessUnitId }
+  if (!businessUnitId) return null
+
+  return { accessToken: freshSf.accessToken, businessUnitId }
 }
 
 // ─── Salesforce SOQL ──────────────────────────────────────────────────────────

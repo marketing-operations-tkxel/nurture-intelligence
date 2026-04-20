@@ -31,7 +31,7 @@ async function validateSalesforce(creds: Record<string, string>): Promise<{ erro
       },
     })
     const result = await conn.login(username, passwordWithToken)
-    return { error: null, accessToken: result.accessToken, instanceUrl: conn.instanceUrl }
+    return { error: null, accessToken: conn.accessToken ?? undefined, instanceUrl: conn.instanceUrl }
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err)
     return { error: `Salesforce login failed: ${msg}` }

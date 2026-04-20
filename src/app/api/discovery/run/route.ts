@@ -295,44 +295,69 @@ async function detectAttribution(instanceUrl: string, accessToken: string, findi
     describeSfObject(instanceUrl, accessToken, 'Opportunity'),
   ])
 
-  const attrKeywords = ['attribution', 'nurture', 'first_touch', 'last_touch', 'multi_touch', 'campaign_source', 'influenced']
-  const nurtureKeywords = ['nurture', 'drip', 'sequence', 'engagement', 'email_program']
+  const attrKeywords = ['attribution', 'first_touch', 'last_touch', 'multi_touch', 'campaign_source', 'influenced', 'sourced']
+  const nurtureKeywords = ['nurture', 'drip', 'sequence', 'engagement', 'email_program', 'email program', 'automated', 'newsletter']
 
-  const campFields = findFields(campDesc, attrKeywords.concat(nurtureKeywords))
-  const campTypeField = campDesc?.fields.find((f) => f.name === 'Type')
-  const nurtureTypes = campTypeField ? picklistContains(campTypeField, nurtureKeywords) : []
+  // Custom attribution fields
+  const campCustomFields = findFields(campDesc, attrKeywords.concat(nurtureKeywords))
   const campMemberFields = findFields(campMemberDesc, attrKeywords)
-  const oppFields = findFields(oppDesc, attrKeywords)
+  const oppFields = findFields(oppDesc, attrKeywords.concat(['campaign']))
+
+  // Campaign.Type picklist — detect nurture-related types
+  const campTypeField = campDesc?.fields.find((f) => f.name === 'Type')
+  const allCampTypes = (campTypeField?.picklistValues ?? []).filter((v) => v.active).map((v) => v.label)
+  const nurtureTypes = campTypeField ? picklistContains(campTypeField, nurtureKeywords) : []
+
+  // Standard Campaign Influence — check if CampaignMember has Opportunity linkage fields
+  const campMemberHasResponded = campMemberDesc?.fields.find((f) => f.name === 'HasResponded')
+  const campMemberStatus = campMemberDesc?.fields.find((f) => f.name === 'Status')
+
+  // Check if CampaignInfluence object is accessible (optional, may not exist in all editions)
+  const influenceDesc = await describeSfObject(instanceUrl, accessToken, 'CampaignInfluence')
 
   let detectedLogic = ''
-  let confidence = 0.2
+  let confidence = 0.3 // Base: standard Campaign Influence always exists in SF
+
+  // Standard model — always present
+  if (campMemberHasResponded || campMemberStatus) {
+    detectedLogic += 'Standard Salesforce Campaign Influence model detected (CampaignMember.HasResponded / Status tracks prospect engagement per campaign). '
+    confidence += 0.2
+  }
+
+  if (influenceDesc) {
+    detectedLogic += 'CampaignInfluence object available — multi-touch attribution model is enabled in this org. '
+    confidence += 0.25
+  }
 
   if (nurtureTypes.length > 0) {
-    detectedLogic += `Campaign.Type includes nurture-related values: "${nurtureTypes.join('", "')}". `
-    confidence += 0.35
-  }
-  if (campFields.length > 0) {
-    detectedLogic += `Campaign attribution fields: ${campFields.map((f) => f.name).join(', ')}. `
+    detectedLogic += `Campaign.Type picklist includes nurture-related values: "${nurtureTypes.join('", "')}". `
     confidence += 0.2
+  } else if (allCampTypes.length > 0) {
+    detectedLogic += `Campaign.Type picklist has ${allCampTypes.length} values (${allCampTypes.slice(0, 4).join(', ')}${allCampTypes.length > 4 ? '…' : ''}) — no nurture-specific type found yet. Recommend adding a "Nurture Email" or "Engagement" type. `
+  }
+
+  if (campCustomFields.length > 0) {
+    detectedLogic += `Custom Campaign attribution fields: ${campCustomFields.map((f) => f.name).join(', ')}. `
+    confidence += 0.15
   }
   if (campMemberFields.length > 0) {
     detectedLogic += `CampaignMember attribution fields: ${campMemberFields.map((f) => f.name).join(', ')}. `
-    confidence += 0.2
+    confidence += 0.1
   }
   if (oppFields.length > 0) {
-    detectedLogic += `Opportunity attribution fields: ${oppFields.map((f) => f.name).join(', ')}. `
-    confidence += 0.15
+    detectedLogic += `Opportunity campaign/attribution fields: ${oppFields.map((f) => f.name).join(', ')}. `
+    confidence += 0.1
   }
+
   if (!detectedLogic) {
-    detectedLogic = 'No explicit attribution fields found. Standard Salesforce Campaign Influence (CampaignMember → Opportunity) available but may not be configured. Pardot engagement history can be used as a signal. Recommend defining Campaign.Type = "Nurture" and enabling Campaign Influence reporting.'
-    confidence = 0.15
+    detectedLogic = 'Standard Campaign Influence model available via CampaignMember → Opportunity linkage. No custom attribution fields detected. Recommend enabling Campaign Influence in Salesforce Setup and defining Campaign.Type = "Nurture Email" for Pardot sequences.'
   }
 
   findings.push({
     concept: 'attribution',
     platform: 'salesforce',
-    object: 'Campaign / CampaignMember / Opportunity',
-    fieldApiName: null,
+    object: 'Campaign / CampaignMember / CampaignInfluence / Opportunity',
+    fieldApiName: influenceDesc ? 'CampaignInfluence' : null,
     detectedLogic: detectedLogic.trim(),
     confidenceScore: Math.min(confidence, 0.95),
   })

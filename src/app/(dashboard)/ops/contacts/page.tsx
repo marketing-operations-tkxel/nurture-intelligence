@@ -2,6 +2,101 @@ import { auth } from '@/lib/auth'
 import Header from '@/components/layout/Header'
 import { mockContactBuckets, mockProspectDetail } from '@/lib/mock-data'
 import { formatNumber } from '@/lib/utils'
+import { getPardotCreds, pardotGet } from '@/lib/sf-api'
+
+interface PardotProspect {
+  id?: number
+  firstName?: string
+  lastName?: string
+  email?: string
+  jobTitle?: string
+  score?: number
+  grade?: string
+  lastActivityAt?: string
+  optedOut?: boolean
+  isBounced?: boolean
+  emailsSent?: number
+  emailsOpened?: number
+  emailsClicked?: number
+  emailsBounced?: number
+  emailsUnsubscribed?: number
+}
+
+async function fetchContacts() {
+  try {
+    const creds = await getPardotCreds()
+    if (!creds) return null
+
+    const data = await pardotGet<{ values?: PardotProspect[] }>(
+      creds,
+      'prospects?fields=id,firstName,lastName,email,jobTitle,score,grade,lastActivityAt,optedOut,isBounced&limit=500'
+    )
+
+    const prospects = data?.values ?? []
+    if (!prospects.length) return null
+
+    const now = Date.now()
+    const thirtyDays = 30 * 24 * 60 * 60 * 1000
+    const ninetyDays = 90 * 24 * 60 * 60 * 1000
+    const sixMonths = 180 * 24 * 60 * 60 * 1000
+
+    const buckets = { hot: 0, warm: 0, cold: 0, inactive: 0, suppression: 0, recycle: 0 }
+
+    const prospectDetails = prospects.map(p => {
+      const score = p.score ?? 0
+      const lastActivity = p.lastActivityAt ? new Date(p.lastActivityAt).getTime() : 0
+      const daysSinceActivity = lastActivity ? (now - lastActivity) / (1000 * 60 * 60 * 24) : 999
+      const isBounced = p.isBounced ?? false
+      const isOptedOut = p.optedOut ?? false
+
+      let status = 'Cold'
+      if (isBounced || isOptedOut) {
+        buckets.suppression++
+        status = isBounced ? 'Bounced' : 'Unsub'
+      } else if (daysSinceActivity > 180) {
+        buckets.recycle++
+        status = 'Dark'
+      } else if (daysSinceActivity > 90) {
+        buckets.inactive++
+        status = 'Dark'
+      } else if (score >= 60 || daysSinceActivity < 7) {
+        buckets.hot++
+        status = 'Engaged'
+      } else if (score >= 30 || daysSinceActivity < 30) {
+        buckets.warm++
+        status = 'Low Click'
+      } else {
+        buckets.cold++
+        status = 'Low Open'
+      }
+
+      return {
+        id: p.id ?? 0,
+        name: [p.firstName, p.lastName].filter(Boolean).join(' ') || p.email || `Prospect ${p.id}`,
+        title: p.jobTitle ?? '—',
+        delivered: 0,
+        opens: 0,
+        clicks: 0,
+        bounces: isBounced ? 1 : 0,
+        unsubs: isOptedOut ? 1 : 0,
+        status,
+      }
+    })
+
+    // Recycle = prospects inactive 6+ months
+    const recycleProspects = prospects.filter(p => {
+      const lastActivity = p.lastActivityAt ? new Date(p.lastActivityAt).getTime() : 0
+      return lastActivity && (now - lastActivity) > sixMonths
+    }).length
+    buckets.recycle = recycleProspects
+
+    const topProspects = prospectDetails
+      .filter(p => p.status !== 'Bounced' && p.status !== 'Unsub')
+      .slice(0, 50)
+
+    return { buckets, prospects: topProspects }
+  } catch { return null }
+}
 
 const bucketConfig = [
   {
@@ -56,19 +151,29 @@ const bucketConfig = [
 
 export default async function ContactsPage() {
   const session = await auth()
+  const live = await fetchContacts()
+  const isLive = !!live
 
-  const buckets = mockContactBuckets as Record<string, number>
+  const buckets = (live?.buckets ?? mockContactBuckets) as Record<string, number>
+  const prospectRows = live?.prospects ?? mockProspectDetail
 
   return (
     <div className="flex flex-col min-h-full">
       <Header
         title="Contact Intelligence"
-        subtitle="Audience health, engagement buckets, suppression and recycle candidates"
+        subtitle={isLive ? 'Live Pardot Data' : 'Audience health, engagement buckets, suppression and recycle candidates'}
         userName={session?.user?.name}
         userRole={session?.user?.role!}
       />
 
       <div className="p-6 space-y-6">
+        {!isLive && (
+          <div className="bg-yellow-500/8 border border-yellow-500/15 rounded-xl px-5 py-3 flex items-center gap-3">
+            <svg className="w-4 h-4 text-yellow-400 shrink-0" viewBox="0 0 24 24" fill="currentColor"><path d="M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z"/></svg>
+            <p className="text-yellow-400/80 text-sm">Showing sample data — <a href="/admin/integrations" className="underline">connect Pardot</a> to see live contact intelligence.</p>
+          </div>
+        )}
+
         {/* Bucket cards */}
         <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
           {bucketConfig.map((b) => (
@@ -79,7 +184,7 @@ export default async function ContactsPage() {
                   <path d={b.icon} />
                 </svg>
               </div>
-              <p className="text-white font-bold text-3xl mb-1">{formatNumber(buckets[b.key])}</p>
+              <p className="text-white font-bold text-3xl mb-1">{formatNumber(buckets[b.key] ?? 0)}</p>
               <p className="text-white/30 text-xs">{b.description}</p>
             </div>
           ))}
@@ -114,7 +219,7 @@ export default async function ContactsPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {mockProspectDetail.map((p) => (
+                  {prospectRows.map((p) => (
                     <tr key={p.id} className="bg-graphite-800 border-t border-white/5 hover:bg-white/5 transition-colors">
                       <td className="px-4 py-3 text-white/40 font-mono text-xs">{p.id}</td>
                       <td className="px-4 py-3 text-white/80 font-medium whitespace-nowrap">{p.name}</td>

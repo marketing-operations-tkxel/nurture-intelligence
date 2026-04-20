@@ -2,81 +2,180 @@ import { auth } from '@/lib/auth'
 import Header from '@/components/layout/Header'
 import { mockTopSegments, mockTopIndustries } from '@/lib/mock-data'
 import { formatPercent, formatCurrency, formatNumber } from '@/lib/utils'
+import { getPardotCreds, getSfCreds, pardotGet, sfQuery, pct } from '@/lib/sf-api'
 
-const segmentExtData: Record<string, { delivered: number; opens: number; clicks: number; unsubs: number; bounces: number; action: string }> = {
-  'SaaS / Technology': { delivered: 27012, opens: 8428, clicks: 1837, unsubs: 81, bounces: 1351, action: 'Scale Up' },
-  'Financial Services': { delivered: 11495, opens: 3299, clicks: 679, unsubs: 57, bounces: 460, action: 'Optimize' },
-  'Professional Services': { delivered: 9499, opens: 2508, clicks: 485, unsubs: 38, bounces: 285, action: 'Optimize' },
+interface PardotList {
+  id?: number
+  name?: string
+  title?: string
+  memberCount?: number
+}
+
+interface CampaignRecord {
+  Type?: string
+  Name?: string
+  NumberOfLeads?: number
+  NumberOfOpportunities?: number
+  AmountAllOpportunities?: number
+}
+
+async function fetchSegmentData() {
+  try {
+    const [sfCreds, pardotCreds] = await Promise.all([getSfCreds(), getPardotCreds()])
+    if (!pardotCreds && !sfCreds) return null
+
+    // Pardot lists as segments
+    const listData = pardotCreds
+      ? await pardotGet<{ values?: PardotList[] }>(pardotCreds, 'lists?fields=id,name,title,memberCount&limit=200')
+      : null
+
+    const lists = (listData?.values ?? [])
+      .filter(l => (l.memberCount ?? 0) > 0)
+      .sort((a, b) => (b.memberCount ?? 0) - (a.memberCount ?? 0))
+      .slice(0, 20)
+      .map(l => ({
+        name: l.name ?? l.title ?? `List ${l.id}`,
+        memberCount: l.memberCount ?? 0,
+        openRate: 0,
+        clickRate: 0,
+        mqlRate: 0,
+      }))
+
+    // SF Campaign type breakdown
+    const campResult = sfCreds
+      ? await sfQuery<CampaignRecord>(
+          sfCreds,
+          'SELECT Type, Name, NumberOfLeads, NumberOfOpportunities, AmountAllOpportunities FROM Campaign WHERE IsActive = true ORDER BY NumberOfLeads DESC LIMIT 50'
+        )
+      : null
+
+    const campaigns = (campResult?.records ?? []).map(c => ({
+      name: c.Name ?? 'Unnamed',
+      type: c.Type ?? 'Other',
+      leads: c.NumberOfLeads ?? 0,
+      opportunities: c.NumberOfOpportunities ?? 0,
+      revenue: c.AmountAllOpportunities ?? 0,
+    }))
+
+    // Aggregate by type for industry view
+    const byType: Record<string, { leads: number; revenue: number; count: number }> = {}
+    for (const c of campaigns) {
+      if (!byType[c.type]) byType[c.type] = { leads: 0, revenue: 0, count: 0 }
+      byType[c.type].leads += c.leads
+      byType[c.type].revenue += c.revenue
+      byType[c.type].count++
+    }
+    const industries = Object.entries(byType)
+      .map(([name, v]) => ({ name, mqls: v.leads, revenue: v.revenue }))
+      .sort((a, b) => b.mqls - a.mqls)
+      .slice(0, 10)
+
+    if (!lists.length && !industries.length) return null
+
+    return { segments: lists, industries, sfConnected: !!sfCreds, pardotConnected: !!pardotCreds }
+  } catch { return null }
 }
 
 export default async function SegmentsPage() {
   const session = await auth()
+  const live = await fetchSegmentData()
+  const isLive = !!live
+
+  const segments = live?.segments?.length ? live.segments : mockTopSegments
+  const industries = live?.industries?.length ? live.industries : mockTopIndustries
 
   return (
     <div className="flex flex-col min-h-full">
       <Header
         title="Segments & Industries"
-        subtitle="Performance breakdown by audience segment and account industry"
+        subtitle={isLive ? 'Live Pardot & Salesforce Data' : 'Performance breakdown by audience segment and account industry'}
         userName={session?.user?.name}
         userRole={session?.user?.role!}
       />
 
       <div className="p-6 space-y-6">
+        {!isLive && (
+          <div className="bg-yellow-500/8 border border-yellow-500/15 rounded-xl px-5 py-3 flex items-center gap-3">
+            <svg className="w-4 h-4 text-yellow-400 shrink-0" viewBox="0 0 24 24" fill="currentColor"><path d="M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z"/></svg>
+            <p className="text-yellow-400/80 text-sm">Showing sample data — <a href="/admin/integrations" className="underline">connect Salesforce &amp; Pardot</a> to see live segment performance.</p>
+          </div>
+        )}
+
+        {/* Segment Performance */}
         <div className="bg-graphite-800 border border-white/5 rounded-xl overflow-hidden">
           <div className="px-5 py-4 border-b border-white/5">
-            <p className="text-white font-medium">Segment Performance</p>
+            <p className="text-white font-medium">
+              {isLive && live?.pardotConnected ? 'Pardot Lists' : 'Segment Performance'}
+            </p>
           </div>
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-white/5">
-                  {['Segment', 'Delivered', 'Open Rate', 'Opens', 'Click Rate', 'Clicks', 'MQL Rate', 'Unsub', 'Bounce', 'Trend', 'Action'].map((h) => (
-                    <th key={h} className="text-left px-5 py-3 text-white/25 text-xs font-mono uppercase tracking-widest whitespace-nowrap">{h}</th>
-                  ))}
+                  {isLive && live?.pardotConnected
+                    ? ['List Name', 'Members', 'Open Rate', 'Click Rate', 'MQL Rate', 'Action'].map(h => (
+                        <th key={h} className="text-left px-5 py-3 text-white/25 text-xs font-mono uppercase tracking-widest whitespace-nowrap">{h}</th>
+                      ))
+                    : ['Segment', 'Delivered', 'Open Rate', 'Opens', 'Click Rate', 'Clicks', 'MQL Rate', 'Unsub', 'Bounce', 'Trend', 'Action'].map(h => (
+                        <th key={h} className="text-left px-5 py-3 text-white/25 text-xs font-mono uppercase tracking-widest whitespace-nowrap">{h}</th>
+                      ))
+                  }
                 </tr>
               </thead>
               <tbody className="divide-y divide-white/5">
-                {mockTopSegments.map((s) => {
-                  const ext = segmentExtData[s.name]
-                  return (
-                    <tr key={s.name} className="hover:bg-white/2">
-                      <td className="px-5 py-3 text-white whitespace-nowrap">{s.name}</td>
-                      <td className="px-5 py-3 font-mono text-white/70">{ext ? formatNumber(ext.delivered) : '—'}</td>
-                      <td className="px-5 py-3 font-mono text-white/70">{formatPercent(s.openRate)}</td>
-                      <td className="px-5 py-3 font-mono text-white/70">{ext ? formatNumber(ext.opens) : '—'}</td>
-                      <td className="px-5 py-3 font-mono text-white/70">{formatPercent(s.clickRate)}</td>
-                      <td className="px-5 py-3 font-mono text-white/70">{ext ? formatNumber(ext.clicks) : '—'}</td>
-                      <td className="px-5 py-3 font-mono text-pulse-blue font-medium">{formatPercent(s.mqlRate)}</td>
-                      <td className="px-5 py-3 font-mono text-white/70">{ext ? formatNumber(ext.unsubs) : '—'}</td>
-                      <td className="px-5 py-3 font-mono text-white/70">{ext ? formatNumber(ext.bounces) : '—'}</td>
-                      <td className="px-5 py-3 text-accent-green text-xs font-mono">↑ improving</td>
-                      <td className="px-5 py-3">{ext ? <ActionBadge action={ext.action} /> : null}</td>
-                    </tr>
-                  )
-                })}
+                {isLive && live?.pardotConnected
+                  ? segments.map((s) => (
+                      <tr key={s.name} className="hover:bg-white/2">
+                        <td className="px-5 py-3 text-white whitespace-nowrap max-w-[240px]"><p className="truncate">{s.name}</p></td>
+                        <td className="px-5 py-3 font-mono text-white/70">{'memberCount' in s ? formatNumber((s as { memberCount: number }).memberCount) : '—'}</td>
+                        <td className="px-5 py-3 font-mono text-white/70">{formatPercent(s.openRate ?? 0)}</td>
+                        <td className="px-5 py-3 font-mono text-white/70">{formatPercent(s.clickRate ?? 0)}</td>
+                        <td className="px-5 py-3 font-mono text-pulse-blue font-medium">{formatPercent(s.mqlRate ?? 0)}</td>
+                        <td className="px-5 py-3"><ActionBadge action="Optimize" /></td>
+                      </tr>
+                    ))
+                  : (mockTopSegments as typeof mockTopSegments).map((s) => (
+                      <tr key={s.name} className="hover:bg-white/2">
+                        <td className="px-5 py-3 text-white whitespace-nowrap">{s.name}</td>
+                        <td className="px-5 py-3 font-mono text-white/70">—</td>
+                        <td className="px-5 py-3 font-mono text-white/70">{formatPercent(s.openRate)}</td>
+                        <td className="px-5 py-3 font-mono text-white/70">—</td>
+                        <td className="px-5 py-3 font-mono text-white/70">{formatPercent(s.clickRate)}</td>
+                        <td className="px-5 py-3 font-mono text-white/70">—</td>
+                        <td className="px-5 py-3 font-mono text-pulse-blue font-medium">{formatPercent(s.mqlRate)}</td>
+                        <td className="px-5 py-3 font-mono text-white/70">—</td>
+                        <td className="px-5 py-3 font-mono text-white/70">—</td>
+                        <td className="px-5 py-3 text-accent-green text-xs font-mono">↑ improving</td>
+                        <td className="px-5 py-3"><ActionBadge action="Optimize" /></td>
+                      </tr>
+                    ))
+                }
               </tbody>
             </table>
           </div>
         </div>
 
+        {/* Industry / Campaign Performance */}
         <div className="bg-graphite-800 border border-white/5 rounded-xl overflow-hidden">
           <div className="px-5 py-4 border-b border-white/5">
-            <p className="text-white font-medium">Industry Performance</p>
+            <p className="text-white font-medium">
+              {isLive && live?.sfConnected ? 'Campaign Performance by Type' : 'Industry Performance'}
+            </p>
           </div>
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-white/5">
-                {['Industry', 'MQLs', 'Won Revenue'].map((h) => (
+                {['Industry / Type', 'MQLs / Leads', 'Won Revenue'].map((h) => (
                   <th key={h} className="text-left px-5 py-3 text-white/25 text-xs font-mono uppercase tracking-widest">{h}</th>
                 ))}
               </tr>
             </thead>
             <tbody className="divide-y divide-white/5">
-              {mockTopIndustries.map((ind) => (
+              {industries.map((ind) => (
                 <tr key={ind.name} className="hover:bg-white/2">
                   <td className="px-5 py-3 text-white">{ind.name}</td>
                   <td className="px-5 py-3 font-mono text-white/70">{formatNumber(ind.mqls)}</td>
-                  <td className="px-5 py-3 font-mono text-accent-green">{formatCurrency(ind.revenue)}</td>
+                  <td className="px-5 py-3 font-mono text-accent-green">{ind.revenue ? formatCurrency(ind.revenue) : '—'}</td>
                 </tr>
               ))}
             </tbody>

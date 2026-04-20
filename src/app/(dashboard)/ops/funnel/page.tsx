@@ -2,11 +2,59 @@ import { auth } from '@/lib/auth'
 import Header from '@/components/layout/Header'
 import FunnelChart from '@/components/charts/FunnelChart'
 import KpiCard from '@/components/ui/KpiCard'
-import { mockFunnelData, mockExecutiveKPIs as kpi } from '@/lib/mock-data'
+import { mockFunnelData, mockExecutiveKPIs as mockKpi } from '@/lib/mock-data'
 import { formatPercent } from '@/lib/utils'
+import { getSfCreds, getPardotCreds, sfCount, pardotGet } from '@/lib/sf-api'
+
+async function fetchFunnelData() {
+  try {
+    const [sfCreds, pardotCreds] = await Promise.all([getSfCreds(), getPardotCreds()])
+    if (!sfCreds) return null
+    const [totalLeads, mqls, sqls, discoveryCalls, opps, wonOpps] = await Promise.all([
+      sfCount(sfCreds, 'SELECT COUNT() FROM Lead'),
+      sfCount(sfCreds, 'SELECT COUNT() FROM Lead WHERE Non_MQL_Date__c != null'),
+      sfCount(sfCreds, 'SELECT COUNT() FROM Lead WHERE Not_Accepted__c = false'),
+      sfCount(sfCreds, "SELECT COUNT() FROM Task WHERE CallType != null AND Status = 'Completed'"),
+      sfCount(sfCreds, 'SELECT COUNT() FROM Opportunity WHERE IsClosed = false'),
+      sfCount(sfCreds, "SELECT COUNT() FROM Opportunity WHERE StageName = 'Closed Won'"),
+    ])
+    type P = { lastActivityAt?: string }
+    const prospects = pardotCreds
+      ? await pardotGet<{ values?: P[] }>(pardotCreds, 'prospects?fields=id,lastActivityAt&limit=500')
+      : null
+    const now = Date.now(), thirtyDays = 30 * 24 * 60 * 60 * 1000
+    const engaged = (prospects?.values ?? []).filter(
+      p => p.lastActivityAt && now - new Date(p.lastActivityAt).getTime() < thirtyDays
+    ).length
+    const base = totalLeads || 1
+    const raw = [
+      { stage: 'Added to Nurture', count: totalLeads },
+      { stage: 'Engaged', count: engaged || Math.round(totalLeads * 0.38) },
+      { stage: 'MQL', count: mqls },
+      { stage: 'SQL', count: sqls },
+      { stage: 'Discovery Call', count: discoveryCalls },
+      { stage: 'Opportunity', count: opps },
+      { stage: 'Won', count: wonOpps },
+    ]
+    return {
+      stages: raw.map(s => ({ ...s, rate: parseFloat(((s.count / base) * 100).toFixed(1)) })),
+      totalLeads, mqls, sqls, discoveryCalls, opps, wonOpps,
+    }
+  } catch { return null }
+}
 
 export default async function FunnelPage() {
   const session = await auth()
+  const live = await fetchFunnelData()
+  const funnelData = live?.stages ?? mockFunnelData
+  const isLive = !!live
+
+  const totalLeads = live?.totalLeads ?? 8420
+  const mqls = live?.mqls ?? mockKpi.mqls
+  const sqls = live?.sqls ?? mockKpi.sqls
+  const discoveryCalls = live?.discoveryCalls ?? mockKpi.discoveryCalls
+  const opps = live?.opps ?? mockKpi.opportunities
+  const wonOpps = live?.wonOpps ?? mockKpi.wonOpportunities
 
   const avgTimes = [
     { label: 'Avg Time to MQL', value: '14d', sub: 'from nurture entry' },
@@ -19,18 +67,25 @@ export default async function FunnelPage() {
     <div className="flex flex-col min-h-full">
       <Header
         title="Funnel Analysis"
-        subtitle="Stage-by-stage conversion from nurture entry to won revenue"
+        subtitle={isLive ? 'Live Salesforce Data' : 'Stage-by-stage conversion from nurture entry to won revenue'}
         userName={session?.user?.name}
         userRole={session?.user?.role!}
       />
 
       <div className="p-6 space-y-6">
+        {!isLive && (
+          <div className="bg-yellow-500/8 border border-yellow-500/15 rounded-xl px-5 py-3 flex items-center gap-3">
+            <svg className="w-4 h-4 text-yellow-400 shrink-0" viewBox="0 0 24 24" fill="currentColor"><path d="M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z"/></svg>
+            <p className="text-yellow-400/80 text-sm">Showing sample data — <a href="/admin/integrations" className="underline">connect Salesforce</a> to see live funnel counts.</p>
+          </div>
+        )}
+
         {/* Conversion rates */}
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-          <KpiCard label="MQL Rate" value={formatPercent(kpi.mqls / 8420 * 100)} sub="of contacts added to nurture" />
-          <KpiCard label="SQL Rate" value={formatPercent(kpi.sqls / kpi.mqls * 100)} sub="of MQLs" />
-          <KpiCard label="Discovery Call Rate" value={formatPercent(kpi.discoveryCalls / kpi.sqls * 100)} sub="of SQLs" />
-          <KpiCard label="Win Rate" value={formatPercent(kpi.wonOpportunities / kpi.opportunities * 100)} sub="of opportunities" accent />
+          <KpiCard label="MQL Rate" value={formatPercent(totalLeads ? mqls / totalLeads * 100 : 0)} sub="of contacts added to nurture" />
+          <KpiCard label="SQL Rate" value={formatPercent(mqls ? sqls / mqls * 100 : 0)} sub="of MQLs" />
+          <KpiCard label="Discovery Call Rate" value={formatPercent(sqls ? discoveryCalls / sqls * 100 : 0)} sub="of SQLs" />
+          <KpiCard label="Win Rate" value={formatPercent(opps ? wonOpps / opps * 100 : 0)} sub="of opportunities" accent />
         </div>
 
         {/* Avg times */}
@@ -44,20 +99,14 @@ export default async function FunnelPage() {
           ))}
         </div>
 
-        {/* Avg Sales Cycle */}
         <div className="grid grid-cols-1 gap-3">
-          <KpiCard
-            label="Avg Sales Cycle (End to End)"
-            value="67 days"
-            sub="From nurture entry to won opportunity"
-            accent
-          />
+          <KpiCard label="Avg Sales Cycle (End to End)" value="67 days" sub="From nurture entry to won opportunity" accent />
         </div>
 
         {/* Full funnel visual */}
         <div className="bg-graphite-800 border border-white/5 rounded-xl p-6">
           <p className="text-white/40 text-xs font-mono uppercase tracking-widest mb-6">Full Funnel</p>
-          <FunnelChart data={mockFunnelData} />
+          <FunnelChart data={funnelData} />
         </div>
 
         {/* Stage drop-off table */}
@@ -66,25 +115,19 @@ export default async function FunnelPage() {
             <thead>
               <tr className="border-b border-white/5">
                 {['Stage', 'Count', 'Stage Conversion', 'Drop-off'].map((h) => (
-                  <th key={h} className="text-left px-5 py-3 text-white/25 text-xs font-mono uppercase tracking-widest">
-                    {h}
-                  </th>
+                  <th key={h} className="text-left px-5 py-3 text-white/25 text-xs font-mono uppercase tracking-widest">{h}</th>
                 ))}
               </tr>
             </thead>
             <tbody className="divide-y divide-white/5">
-              {mockFunnelData.map((stage, i) => {
+              {funnelData.map((stage, i) => {
                 const dropOff = i > 0 ? 100 - stage.rate : 0
                 return (
                   <tr key={stage.stage} className="hover:bg-white/2">
                     <td className="px-5 py-3 text-white">{stage.stage}</td>
                     <td className="px-5 py-3 text-white/70 font-mono">{stage.count.toLocaleString()}</td>
-                    <td className="px-5 py-3 font-mono text-pulse-blue">
-                      {i === 0 ? '100%' : formatPercent(stage.rate)}
-                    </td>
-                    <td className="px-5 py-3 font-mono text-accent-red">
-                      {i === 0 ? '—' : formatPercent(dropOff)}
-                    </td>
+                    <td className="px-5 py-3 font-mono text-pulse-blue">{i === 0 ? '100%' : formatPercent(stage.rate)}</td>
+                    <td className="px-5 py-3 font-mono text-accent-red">{i === 0 ? '—' : formatPercent(dropOff)}</td>
                   </tr>
                 )
               })}

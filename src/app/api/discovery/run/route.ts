@@ -1,5 +1,4 @@
 import { NextResponse } from 'next/server'
-import { Prisma } from '@prisma/client'
 import { prisma } from '@/lib/prisma'
 import { Connection } from 'jsforce'
 
@@ -18,8 +17,7 @@ interface ObjectDescribeResult {
 
 interface Creds {
   instanceUrl?: string
-  clientId?: string
-  clientSecret?: string
+  accessToken?: string  // stored after successful jsforce login
   businessUnitId?: string
 }
 
@@ -30,27 +28,6 @@ interface Finding {
   fieldApiName: string | null
   detectedLogic: string
   confidenceScore: number
-}
-
-// ─── OAuth helper ─────────────────────────────────────────────────────────────
-
-async function getSalesforceToken(creds: Creds): Promise<{ accessToken: string; instanceUrl: string }> {
-  const url = `${creds.instanceUrl!.replace(/\/$/, '')}/services/oauth2/token`
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({
-      grant_type: 'client_credentials',
-      client_id: creds.clientId!,
-      client_secret: creds.clientSecret!,
-    }).toString(),
-  })
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({})) as { error_description?: string }
-    throw new Error(err.error_description ?? 'Salesforce auth failed')
-  }
-  const data = await res.json() as { access_token: string; instance_url: string }
-  return { accessToken: data.access_token, instanceUrl: data.instance_url }
 }
 
 // ─── Salesforce discovery helpers ────────────────────────────────────────────
@@ -385,13 +362,19 @@ export async function POST() {
     const sfCreds = sfIntegration.settings as Creds
     const pardotCreds = pardotIntegration.settings as Creds
 
+    // Use the stored access token from the validated Salesforce connection
+    const accessToken = sfCreds.accessToken
+    const instanceUrl = sfCreds.instanceUrl
+
+    if (!accessToken || !instanceUrl) {
+      return NextResponse.json({ error: 'Salesforce access token not found. Please reconnect Salesforce.' }, { status: 400 })
+    }
+
     // Create DiscoveryReport record
     const report = await prisma.discoveryReport.create({
       data: { status: 'running' },
     })
 
-    // Authenticate with Salesforce
-    const { accessToken, instanceUrl } = await getSalesforceToken(sfCreds)
     const conn = new Connection({ instanceUrl, accessToken })
 
     // Run all detectors in parallel

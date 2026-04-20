@@ -24,13 +24,9 @@ async function validateSalesforce(creds: Record<string, string>): Promise<{ erro
 
   try {
     const conn = new jsforce.Connection({
-      oauth2: {
-        loginUrl: instanceUrl,
-        clientId,
-        clientSecret,
-      },
+      loginUrl: 'https://login.salesforce.com',
     })
-    const result = await conn.login(username, passwordWithToken)
+    await conn.login(username, passwordWithToken)
     return { error: null, accessToken: conn.accessToken ?? undefined, instanceUrl: conn.instanceUrl }
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err)

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
+import jsforce from 'jsforce'
 
 export async function GET() {
   try {
@@ -15,38 +16,26 @@ export async function GET() {
 // Credential validators — actually hit the OAuth endpoint before saving
 // ---------------------------------------------------------------------------
 
-async function validateSalesforce(creds: Record<string, string>): Promise<string | null> {
-  const { instanceUrl, clientId, clientSecret } = creds
-  if (!instanceUrl || !clientId || !clientSecret) return 'Missing required fields'
+async function validateSalesforce(creds: Record<string, string>): Promise<{ error: string | null; accessToken?: string; instanceUrl?: string }> {
+  const { instanceUrl, clientId, clientSecret, username, passwordWithToken } = creds
+  if (!instanceUrl || !clientId || !clientSecret || !username || !passwordWithToken) {
+    return { error: 'Missing required fields' }
+  }
 
-  const url = `${instanceUrl.replace(/\/$/, '')}/services/oauth2/token`
-  const body = new URLSearchParams({
-    grant_type: 'client_credentials',
-    client_id: clientId,
-    client_secret: clientSecret,
-  })
-
-  let res: Response
   try {
-    res = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: body.toString(),
+    const conn = new jsforce.Connection({
+      oauth2: {
+        loginUrl: instanceUrl,
+        clientId,
+        clientSecret,
+      },
     })
-  } catch {
-    return 'Could not reach the Salesforce instance URL. Check the URL and try again.'
+    const result = await conn.login(username, passwordWithToken)
+    return { error: null, accessToken: result.accessToken, instanceUrl: conn.instanceUrl }
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err)
+    return { error: `Salesforce login failed: ${msg}` }
   }
-
-  if (!res.ok) {
-    let detail = ''
-    try {
-      const j = await res.json() as { error_description?: string; error?: string }
-      detail = j.error_description ?? j.error ?? ''
-    } catch { /* ignore */ }
-    return `Salesforce rejected the credentials: ${detail || res.statusText}`
-  }
-
-  return null // success
 }
 
 async function validatePardot(creds: Record<string, string>): Promise<string | null> {
@@ -133,17 +122,23 @@ export async function PUT(req: NextRequest) {
     }
 
     // Only validate when actively connecting (not on disconnect)
+    let settingsToStore: Record<string, string> | undefined = metadata
     if (status === 'connected' && metadata) {
-      let validationError: string | null = null
-
       if (platform === 'salesforce') {
-        validationError = await validateSalesforce(metadata)
+        const result = await validateSalesforce(metadata)
+        if (result.error) {
+          return NextResponse.json({ error: result.error }, { status: 400 })
+        }
+        settingsToStore = {
+          ...metadata,
+          ...(result.accessToken ? { accessToken: result.accessToken } : {}),
+          ...(result.instanceUrl ? { instanceUrl: result.instanceUrl } : {}),
+        }
       } else if (platform === 'pardot') {
-        validationError = await validatePardot(metadata)
-      }
-
-      if (validationError) {
-        return NextResponse.json({ error: validationError }, { status: 400 })
+        const validationError = await validatePardot(metadata)
+        if (validationError) {
+          return NextResponse.json({ error: validationError }, { status: 400 })
+        }
       }
     }
 
@@ -151,14 +146,14 @@ export async function PUT(req: NextRequest) {
       where: { platform },
       update: {
         status,
-        settings: metadata ?? undefined,
+        settings: settingsToStore ?? undefined,
         lastSyncAt: status === 'connected' ? new Date() : undefined,
         syncStatus: status === 'connected' ? 'success' : undefined,
       },
       create: {
         platform,
         status,
-        settings: metadata ?? undefined,
+        settings: settingsToStore ?? undefined,
       },
     })
 

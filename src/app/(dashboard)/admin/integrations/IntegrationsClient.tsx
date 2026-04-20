@@ -19,9 +19,11 @@ const PLATFORMS = [
     color: '#00A1E0',
     icon: 'M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 14.5v-9l6 4.5-6 4.5z',
     fields: [
-      { key: 'instanceUrl',    label: 'Instance URL',    placeholder: 'https://yourorg.my.salesforce.com', type: 'url'      },
-      { key: 'clientId',       label: 'Client ID',       placeholder: 'Connected App Client ID',            type: 'text'     },
-      { key: 'clientSecret',   label: 'Client Secret',   placeholder: 'Connected App Client Secret',        type: 'password' },
+      { key: 'instanceUrl',        label: 'Instance URL',                  placeholder: 'https://d90000000tfs5eai.my.salesforce.com', type: 'url'      },
+      { key: 'clientId',           label: 'Client ID (Consumer Key)',       placeholder: 'Connected App Consumer Key',                  type: 'text'     },
+      { key: 'clientSecret',       label: 'Client Secret (Consumer Secret)',placeholder: 'Connected App Consumer Secret',               type: 'password' },
+      { key: 'username',           label: 'Username',                       placeholder: 'you@yourorg.com',                             type: 'text'     },
+      { key: 'passwordWithToken',  label: 'Password + Security Token',      placeholder: 'MyPassword + SecurityToken (combined)',       type: 'password' },
     ],
   },
   {

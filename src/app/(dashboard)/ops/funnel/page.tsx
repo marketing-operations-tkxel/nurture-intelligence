@@ -44,6 +44,16 @@ export default async function FunnelPage() {
           ))}
         </div>
 
+        {/* Avg Sales Cycle */}
+        <div className="grid grid-cols-1 gap-3">
+          <KpiCard
+            label="Avg Sales Cycle (End to End)"
+            value="67 days"
+            sub="From nurture entry to won opportunity"
+            accent
+          />
+        </div>
+
         {/* Full funnel visual */}
         <div className="bg-graphite-800 border border-white/5 rounded-xl p-6">
           <p className="text-white/40 text-xs font-mono uppercase tracking-widest mb-6">Full Funnel</p>

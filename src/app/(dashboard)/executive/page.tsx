@@ -12,8 +12,11 @@ import {
   mockFunnelData,
   mockTrendData,
   mockAiInsight,
+  mockWeeklyTrend,
+  mockMonthlyTrend,
 } from '@/lib/mock-data'
 import { formatNumber, formatCurrency, formatPercent } from '@/lib/utils'
+import DualTrendChart from '@/components/charts/DualTrendChart'
 
 export default async function ExecutivePage() {
   const session = await auth()
@@ -77,6 +80,30 @@ export default async function ExecutivePage() {
           </div>
         </div>
 
+        {/* Email Counts */}
+        <div>
+          <p className="text-white/30 text-xs font-mono uppercase tracking-widest mb-3">Email Counts</p>
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+            <KpiCard label="Opens" value={kpi.opensCount.toLocaleString()} />
+            <KpiCard label="Clicks" value={kpi.clicksCount.toLocaleString()} />
+            <KpiCard label="Unsubscribed" value={kpi.unsubscribesCount.toLocaleString()} />
+            <KpiCard label="Bounced" value={kpi.bouncesCount.toLocaleString()} />
+            <KpiCard label="Spam Complaints" value={kpi.spamCount.toLocaleString()} />
+            <KpiCard label="Avg Sales Cycle" value={`${kpi.avgSalesCycleDays} days`} />
+          </div>
+        </div>
+
+        {/* Prospect Engagement */}
+        <div>
+          <p className="text-white/30 text-xs font-mono uppercase tracking-widest mb-3">Prospect Engagement</p>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <KpiCard label="Prospects Touched" value={kpi.prospectsAddedToNurture.toLocaleString()} />
+            <KpiCard label="Opened Any Email" value={kpi.prospectsOpenedAny.toLocaleString()} change={kpi.prospectsOpenedAnyChange} />
+            <KpiCard label="Clicked Any Email" value={kpi.prospectsClickedAny.toLocaleString()} change={kpi.prospectsClickedAnyChange} />
+            <KpiCard label="No Engagement" value={kpi.prospectsNoEngagement.toLocaleString()} change={kpi.prospectsNoEngagementChange} />
+          </div>
+        </div>
+
         {/* Charts row */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
           <div className="bg-graphite-800 border border-white/5 rounded-xl p-5">
@@ -86,6 +113,48 @@ export default async function ExecutivePage() {
           <div className="bg-graphite-800 border border-white/5 rounded-xl p-5">
             <p className="text-white/40 text-xs font-mono uppercase tracking-widest mb-4">12-Month Trend — Open Rate &amp; MQLs</p>
             <TrendChart data={mockTrendData} />
+          </div>
+        </div>
+
+        {/* Trend Analysis */}
+        <div>
+          <p className="text-white/30 text-xs font-mono uppercase tracking-widest mb-3">Trend Analysis</p>
+          <div className="space-y-4">
+            <DualTrendChart
+              title="Email Opens & Clicks"
+              type="bar-line"
+              weeklyData={mockWeeklyTrend}
+              monthlyData={mockMonthlyTrend}
+              bars={[
+                { key: 'opens', color: '#2952FF' },
+                { key: 'opensPrev', color: '#1a3299' },
+              ]}
+              lines={[
+                { key: 'clicks', color: '#00C875' },
+              ]}
+            />
+            <DualTrendChart
+              title="Bounce & Unsubscribe Rates"
+              type="line-only"
+              weeklyData={mockWeeklyTrend}
+              monthlyData={mockMonthlyTrend}
+              lines={[
+                { key: 'bounceRate', color: '#fb923c' },
+                { key: 'unsubRate', color: '#c084fc' },
+                { key: 'bounceRatePrev', color: '#fb923c', dashed: true },
+                { key: 'unsubRatePrev', color: '#c084fc', dashed: true },
+              ]}
+            />
+            <DualTrendChart
+              title="New Prospects Added"
+              type="bar-line"
+              weeklyData={mockWeeklyTrend}
+              monthlyData={mockMonthlyTrend}
+              bars={[
+                { key: 'prospectsAdded', color: '#1D9E75' },
+                { key: 'prospectsAddedPrev', color: '#085041' },
+              ]}
+            />
           </div>
         </div>
 

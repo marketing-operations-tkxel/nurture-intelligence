@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server'
+import { Prisma } from '@prisma/client'
 import { prisma } from '@/lib/prisma'
 import { Connection } from 'jsforce'
 
@@ -449,7 +450,7 @@ export async function POST() {
       data: {
         status: 'complete',
         completedAt: new Date(),
-        rawAudit: findings as unknown as Record<string, unknown>[],
+        rawAudit: findings as unknown as Prisma.InputJsonValue,
       },
     })
 

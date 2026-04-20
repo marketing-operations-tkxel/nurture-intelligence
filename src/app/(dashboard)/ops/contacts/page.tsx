@@ -1,6 +1,6 @@
 import { auth } from '@/lib/auth'
 import Header from '@/components/layout/Header'
-import { mockContactBuckets } from '@/lib/mock-data'
+import { mockContactBuckets, mockProspectDetail } from '@/lib/mock-data'
 import { formatNumber } from '@/lib/utils'
 
 const bucketConfig = [
@@ -97,7 +97,64 @@ export default async function ContactsPage() {
             </p>
           </div>
         </div>
+
+        {/* Prospect Activity */}
+        <div>
+          <p className="text-white/30 text-xs font-mono uppercase tracking-widest mb-3">Prospect Activity</p>
+          <div className="rounded-xl border border-white/5 overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="bg-graphite-800 border-b border-white/5">
+                    {['#', 'Name', 'Title', 'Delivered', 'Opens', 'Clicks', 'Bounce', 'Unsubs', 'Status'].map((h) => (
+                      <th key={h} className="text-left px-4 py-3 text-white/40 text-xs font-mono uppercase tracking-widest whitespace-nowrap">
+                        {h}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {mockProspectDetail.map((p) => (
+                    <tr key={p.id} className="bg-graphite-800 border-t border-white/5 hover:bg-white/5 transition-colors">
+                      <td className="px-4 py-3 text-white/40 font-mono text-xs">{p.id}</td>
+                      <td className="px-4 py-3 text-white/80 font-medium whitespace-nowrap">{p.name}</td>
+                      <td className="px-4 py-3 text-white/50 whitespace-nowrap">{p.title}</td>
+                      <td className="px-4 py-3 text-white/70 font-mono">{p.delivered}</td>
+                      <td className="px-4 py-3 text-white/70 font-mono">{p.opens}</td>
+                      <td className="px-4 py-3 text-white/70 font-mono">{p.clicks}</td>
+                      <td className="px-4 py-3 text-white/70 font-mono">{p.bounces}</td>
+                      <td className="px-4 py-3 text-white/70 font-mono">{p.unsubs}</td>
+                      <td className="px-4 py-3">
+                        <ProspectStatusBadge status={p.status} />
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
+  )
+}
+
+function ProspectStatusBadge({ status }: { status: string }) {
+  const styles: Record<string, { background: string; color: string }> = {
+    Engaged: { background: '#0f2a18', color: '#4ade80' },
+    'Low Open': { background: '#0f1e38', color: '#38bdf8' },
+    'Low Click': { background: '#0f1e38', color: '#38bdf8' },
+    Dark: { background: '#2a1a0a', color: '#fb923c' },
+    Bounced: { background: '#2a0f0f', color: '#f87171' },
+    Unsub: { background: '#2a0f0f', color: '#f87171' },
+  }
+  const s = styles[status] ?? { background: '#1a1a2a', color: '#c084fc' }
+  return (
+    <span
+      className="text-xs font-mono px-2 py-0.5 rounded-full whitespace-nowrap"
+      style={s}
+    >
+      {status}
+    </span>
   )
 }

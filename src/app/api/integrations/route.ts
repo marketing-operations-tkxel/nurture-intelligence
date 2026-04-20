@@ -37,45 +37,72 @@ async function validateSalesforce(creds: Record<string, string>): Promise<{ erro
 async function validatePardot(settings: Record<string, string>) {
   const { businessUnitId, clientId, clientSecret } = settings
 
+  if (!businessUnitId || !clientId || !clientSecret) {
+    return { error: 'Missing required fields' }
+  }
+
+  const tokenBody = new URLSearchParams({
+    grant_type: 'client_credentials',
+    client_id: clientId,
+    client_secret: clientSecret,
+  })
+
+  // Try production then sandbox — sandbox orgs use test.salesforce.com
+  const loginUrls = [
+    'https://login.salesforce.com/services/oauth2/token',
+    'https://test.salesforce.com/services/oauth2/token',
+  ]
+
+  let accessToken: string | null = null
+  let lastError = ''
+
+  for (const loginUrl of loginUrls) {
+    try {
+      const tokenRes = await fetch(loginUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: tokenBody.toString(),
+      })
+      const tokenData = await tokenRes.json() as {
+        access_token?: string
+        error?: string
+        error_description?: string
+      }
+
+      if (tokenData.access_token) {
+        accessToken = tokenData.access_token
+        break
+      }
+      lastError = tokenData.error_description ?? tokenData.error ?? tokenRes.statusText
+    } catch {
+      lastError = 'Network error reaching Salesforce login.'
+    }
+  }
+
+  if (!accessToken) {
+    return {
+      error: `Salesforce OAuth failed: ${lastError}. To fix: in Salesforce Setup → Connected Apps → [your app] → OAuth Policies, set IP Relaxation to "Relax IP restrictions" and enable "Client Credentials Flow".`,
+    }
+  }
+
+  // Step 2: Probe Pardot API with the business unit ID
   try {
-    // Step 1: Get OAuth token from Salesforce
-    const tokenRes = await fetch('https://login.salesforce.com/services/oauth2/token', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({
-        grant_type: 'client_credentials',
-        client_id: clientId,
-        client_secret: clientSecret,
-      }),
+    const pardotRes = await fetch('https://pi.pardot.com/api/v5/objects/emails?limit=1', {
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Pardot-Business-Unit-Id': businessUnitId,
+      },
     })
 
-    const tokenData = await tokenRes.json()
-
-    if (!tokenData.access_token) {
-      return { error: `Pardot OAuth failed: ${tokenData.error_description || tokenData.error || 'no token returned'}` }
-    }
-
-    // Step 2: Test Pardot API access
-    const pardotRes = await fetch(
-      `https://pi.pardot.com/api/v5/objects/emails?limit=1`,
-      {
-        headers: {
-          'Authorization': `Bearer ${tokenData.access_token}`,
-          'Pardot-Business-Unit-Id': businessUnitId,
-        },
-      }
-    )
-
     if (!pardotRes.ok) {
-      const errText = await pardotRes.text()
-      return { error: `Pardot API error: ${pardotRes.status} ${errText}` }
+      const errText = await pardotRes.text().catch(() => pardotRes.statusText)
+      return { error: `Pardot API error (${pardotRes.status}): ${errText}. Verify your Business Unit ID is correct.` }
     }
-
-    return { error: null, accessToken: tokenData.access_token }
-  } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err)
-    return { error: `Pardot connection failed: ${msg}` }
+  } catch {
+    return { error: 'Could not reach pi.pardot.com. OAuth token was valid but Pardot was unreachable.' }
   }
+
+  return { error: null, accessToken }
 }
 
 // ---------------------------------------------------------------------------

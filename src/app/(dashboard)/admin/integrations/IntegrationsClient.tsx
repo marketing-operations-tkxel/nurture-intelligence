@@ -82,13 +82,16 @@ export default function IntegrationsClient({ integrations }: { integrations: Int
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ platform: modal, status: 'connected', metadata: form }),
       })
-      if (!res.ok) throw new Error('Failed')
-      const updated = await res.json()
-      setStatuses((prev) => ({ ...prev, [modal]: updated }))
+      const data = await res.json()
+      if (!res.ok) {
+        setError(data?.error ?? 'Failed to save. Check your credentials and try again.')
+        return
+      }
+      setStatuses((prev) => ({ ...prev, [modal]: data }))
       closeModal()
       router.refresh()
     } catch {
-      setError('Failed to save. Check your credentials and try again.')
+      setError('Network error. Could not reach the server.')
     } finally {
       setSaving(false)
     }

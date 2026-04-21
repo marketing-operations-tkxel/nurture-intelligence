@@ -1,48 +1,59 @@
 import { auth } from '@/lib/auth'
 import Header from '@/components/layout/Header'
 import { formatNumber, formatPercent, formatCurrency, cn } from '@/lib/utils'
-import { getPardotCreds, pardotGet, pct } from '@/lib/sf-api'
+import { getPardotCreds, pardotGet, pardotStats, pct } from '@/lib/sf-api'
 
-interface PardotEmail {
-  id?: number; name?: string; scheduledAt?: string
-  totalSentCount?: number; deliveredCount?: number
-  uniqueOpenCount?: number; uniqueClickCount?: number
-  hardBounceCount?: number; softBounceCount?: number
-  optOutCount?: number; spamComplaintCount?: number
-}
+type ListEmail = { id?: number; subject?: string; name?: string; sentAt?: string; isSent?: boolean }
 
 async function fetchSequences() {
   try {
     const creds = await getPardotCreds()
     if (!creds) return null
-    const data = await pardotGet<{ values?: PardotEmail[] }>(
-      creds,
-      'emails?fields=id,name,scheduledAt,totalSentCount,deliveredCount,uniqueOpenCount,uniqueClickCount,hardBounceCount,softBounceCount,optOutCount,spamComplaintCount&limit=200'
-    )
-    const emails = (data?.values ?? []).filter(e => (e.totalSentCount ?? 0) > 0)
-    if (!emails.length) return null
 
-    const sequences = emails.map(e => {
-      const sent = e.totalSentCount ?? 0
-      const delivered = e.deliveredCount ?? 0
-      const opens = e.uniqueOpenCount ?? 0
-      const clicks = e.uniqueClickCount ?? 0
-      const bounces = (e.hardBounceCount ?? 0) + (e.softBounceCount ?? 0)
-      const unsubs = e.optOutCount ?? 0
-      return {
-        name: e.name ?? `Email ${e.id}`,
-        segment: 'Pardot List',
-        status: 'active',
-        sent, delivered, opens, clicks, bounces, unsubs,
-        wonRevenue: 0, mqlRate: 0, sqlRate: 0,
-        deliveryRate: pct(delivered, sent),
-        openRate: pct(opens, delivered),
-        clickRate: pct(clicks, delivered),
-        ctor: pct(clicks, opens),
-        unsubRate: pct(unsubs, delivered),
-        signal: pct(opens, delivered) >= 25 ? 'Hot' : pct(opens, delivered) >= 15 ? 'Warm' : 'Cold',
-      }
-    }).sort((a, b) => b.sent - a.sent)
+    const data = await pardotGet<{ values?: ListEmail[] }>(
+      creds,
+      'list-emails?fields=id,name,subject,sentAt,isSent&limit=200'
+    )
+
+    const sentEmails = (data?.values ?? [])
+      .filter(e => e.isSent === true && e.id != null)
+      .sort((a, b) => (b.sentAt ?? '').localeCompare(a.sentAt ?? ''))
+      .slice(0, 50)
+
+    if (!sentEmails.length) return null
+
+    const statsResults = await Promise.all(sentEmails.map(e => pardotStats(creds, e.id!)))
+
+    const sequences = sentEmails
+      .map((e, i) => {
+        const s = statsResults[i]
+        if (!s) return null
+        const sent = s.sent ?? 0
+        const delivered = s.delivered ?? 0
+        const opens = s.uniqueOpens ?? 0
+        const clicks = s.uniqueClicks ?? 0
+        const bounces = (s.hardBounced ?? 0) + (s.softBounced ?? 0)
+        const unsubs = s.optOuts ?? 0
+        const deliveryRate = pct(delivered, sent)
+        const openRate = pct(opens, delivered)
+        const clickRate = pct(clicks, delivered)
+        const ctor = pct(clicks, opens)
+        const bounceRate = pct(bounces, sent)
+        const unsubRate = pct(unsubs, delivered)
+        return {
+          name: e.subject ?? e.name ?? `Email ${e.id}`,
+          segment: 'All Prospects',
+          status: 'active',
+          sent, delivered, opens, clicks, bounces, unsubs,
+          wonRevenue: 0, mqlRate: 0, sqlRate: 0,
+          deliveryRate, openRate, clickRate, ctor, bounceRate, unsubRate,
+          signal: openRate >= 25 ? 'Hot' : openRate >= 15 ? 'Warm' : 'Cold',
+        }
+      })
+      .filter((s): s is NonNullable<typeof s> => s !== null)
+      .sort((a, b) => b.sent - a.sent)
+
+    if (!sequences.length) return null
 
     const subjectLines = sequences.slice(0, 20).map(s => ({
       subject: s.name,

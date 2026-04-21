@@ -34,7 +34,7 @@ async function fetchKpis() {
       sfCreds ? sfCount(sfCreds, 'SELECT COUNT() FROM Lead WHERE Non_MQL_Date__c != null') : 0,
       sfCreds ? sfCount(sfCreds, 'SELECT COUNT() FROM Lead WHERE Not_Accepted__c = false') : 0,
       sfCreds ? sfCount(sfCreds, "SELECT COUNT() FROM Task WHERE CallType != null AND Status = 'Completed'") : 0,
-      sfCreds ? sfQuery<{ expr0: number }>(sfCreds, 'SELECT SUM(Amount) FROM Opportunity WHERE IsWon = true AND IsClosed = true') : null,
+      sfCreds ? sfQuery<{ expr0: number }>(sfCreds, 'SELECT SUM(Amount) FROM Opportunity WHERE IsWon = true AND IsClosed = true AND CloseDate = LAST_N_DAYS:365') : null,
       sfCreds ? sfQuery<{ expr0: number }>(sfCreds, 'SELECT SUM(Amount) FROM Opportunity WHERE IsClosed = false') : null,
       sfCreds ? sfCount(sfCreds, 'SELECT COUNT() FROM Opportunity WHERE CreatedDate = THIS_MONTH') : 0,
     ])
@@ -186,6 +186,20 @@ async function fetchSegments() {
   } catch { return null }
 }
 
+type PeriodBucket = {
+  sortKey: string; label: string
+  sent: number; delivered: number; opens: number; clicks: number; bounces: number; unsubs: number
+}
+
+function getWeekMonday(d: Date): Date {
+  const day = d.getDay()
+  const diff = (day === 0 ? -6 : 1 - day)
+  const monday = new Date(d)
+  monday.setDate(d.getDate() + diff)
+  monday.setHours(0, 0, 0, 0)
+  return monday
+}
+
 async function fetchTrendData() {
   try {
     const pardotCreds = await getPardotCreds()
@@ -194,54 +208,55 @@ async function fetchTrendData() {
     const sentEmails = await fetchSentEmails(pardotCreds)
     const statsResults = await Promise.all(sentEmails.map(e => pardotStats(pardotCreds, e.id!)))
 
-    // Aggregate by calendar month
-    const monthMap = new Map<string, {
-      sortKey: string
-      label: string
-      sent: number; delivered: number; opens: number; clicks: number
-      bounces: number; unsubs: number
-    }>()
+    const monthMap = new Map<string, PeriodBucket>()
+    const weekMap = new Map<string, PeriodBucket>()
 
     sentEmails.forEach((e, i) => {
       const s = statsResults[i]
       if (!s || !e.sentAt) return
       const d = new Date(e.sentAt)
-      const sortKey = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
-      const label = MONTH_NAMES[d.getMonth()]
-      if (!monthMap.has(sortKey)) {
-        monthMap.set(sortKey, { sortKey, label, sent: 0, delivered: 0, opens: 0, clicks: 0, bounces: 0, unsubs: 0 })
-      }
-      const m = monthMap.get(sortKey)!
-      m.sent += s.sent ?? 0
-      m.delivered += s.delivered ?? 0
-      m.opens += s.uniqueOpens ?? 0
-      m.clicks += s.uniqueClicks ?? 0
-      m.bounces += (s.hardBounced ?? 0) + (s.softBounced ?? 0)
-      m.unsubs += s.optOuts ?? 0
+
+      // Monthly bucket
+      const mSortKey = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
+      const mLabel = MONTH_NAMES[d.getMonth()]
+      if (!monthMap.has(mSortKey)) monthMap.set(mSortKey, { sortKey: mSortKey, label: mLabel, sent: 0, delivered: 0, opens: 0, clicks: 0, bounces: 0, unsubs: 0 })
+      const m = monthMap.get(mSortKey)!
+      m.sent += s.sent ?? 0; m.delivered += s.delivered ?? 0
+      m.opens += s.uniqueOpens ?? 0; m.clicks += s.uniqueClicks ?? 0
+      m.bounces += (s.hardBounced ?? 0) + (s.softBounced ?? 0); m.unsubs += s.optOuts ?? 0
+
+      // Weekly bucket — keyed by Monday date, labelled "Mon D"
+      const monday = getWeekMonday(d)
+      const wSortKey = monday.toISOString().slice(0, 10)
+      const wLabel = `${MONTH_NAMES[monday.getMonth()]} ${monday.getDate()}`
+      if (!weekMap.has(wSortKey)) weekMap.set(wSortKey, { sortKey: wSortKey, label: wLabel, sent: 0, delivered: 0, opens: 0, clicks: 0, bounces: 0, unsubs: 0 })
+      const w = weekMap.get(wSortKey)!
+      w.sent += s.sent ?? 0; w.delivered += s.delivered ?? 0
+      w.opens += s.uniqueOpens ?? 0; w.clicks += s.uniqueClicks ?? 0
+      w.bounces += (s.hardBounced ?? 0) + (s.softBounced ?? 0); w.unsubs += s.optOuts ?? 0
     })
 
-    const sorted = [...monthMap.values()].sort((a, b) => a.sortKey.localeCompare(b.sortKey))
+    const sortedMonths = [...monthMap.values()].sort((a, b) => a.sortKey.localeCompare(b.sortKey))
+    const sortedWeeks = [...weekMap.values()].sort((a, b) => a.sortKey.localeCompare(b.sortKey)).slice(-12)
 
-    const monthlyData = sorted.map(m => ({
-      month: m.label,
-      opens: m.opens,
-      clicks: m.clicks,
-      bounceRate: pct(m.bounces, m.sent),
-      unsubRate: pct(m.unsubs, m.delivered),
+    const toChartRow = (b: PeriodBucket, key: 'month' | 'week') => ({
+      [key]: b.label,
+      opens: b.opens, clicks: b.clicks,
+      bounceRate: pct(b.bounces, b.sent),
+      unsubRate: pct(b.unsubs, b.delivered),
       prospectsAdded: 0,
-      opensPrev: 0,
-      bounceRatePrev: 0,
-      unsubRatePrev: 0,
-      prospectsAddedPrev: 0,
-    }))
+    })
 
-    const trendData = sorted.map(m => ({
+    const monthlyData = sortedMonths.map(m => toChartRow(m, 'month'))
+    const weeklyData = sortedWeeks.map(w => toChartRow(w, 'week'))
+
+    const trendData = sortedMonths.map(m => ({
       month: m.label,
       openRate: pct(m.opens, m.delivered),
       mqls: 0,
     }))
 
-    return { monthlyData, trendData }
+    return { monthlyData, weeklyData, trendData }
   } catch { return null }
 }
 
@@ -268,6 +283,7 @@ export default async function ExecutivePage() {
   const worstSequences = liveSeqData?.worstSequences ?? []
   const topSegments = liveSegments ?? []
   const monthlyTrend = liveTrend?.monthlyData ?? []
+  const weeklyTrend = liveTrend?.weeklyData ?? []
   const trendChartData = liveTrend?.trendData ?? []
   const isLive = !!liveKpi
 
@@ -383,7 +399,7 @@ export default async function ExecutivePage() {
             <DualTrendChart
               title="Email Opens & Clicks"
               type="bar-line"
-              weeklyData={[]}
+              weeklyData={weeklyTrend}
               monthlyData={monthlyTrend}
               bars={[{ key: 'opens', color: '#2952FF' }]}
               lines={[{ key: 'clicks', color: '#00C875' }]}
@@ -391,7 +407,7 @@ export default async function ExecutivePage() {
             <DualTrendChart
               title="Bounce & Unsubscribe Rates"
               type="line-only"
-              weeklyData={[]}
+              weeklyData={weeklyTrend}
               monthlyData={monthlyTrend}
               lines={[
                 { key: 'bounceRate', color: '#fb923c' },
@@ -401,7 +417,7 @@ export default async function ExecutivePage() {
             <DualTrendChart
               title="New Prospects Added"
               type="bar-line"
-              weeklyData={[]}
+              weeklyData={weeklyTrend}
               monthlyData={monthlyTrend}
               bars={[{ key: 'prospectsAdded', color: '#1D9E75' }]}
             />

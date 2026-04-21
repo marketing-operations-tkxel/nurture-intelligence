@@ -12,13 +12,32 @@ interface PardotProspect {
   score?: number
   grade?: string
   lastActivityAt?: string
-  optedOut?: boolean
-  isBounced?: boolean
-  emailsSent?: number
-  emailsOpened?: number
-  emailsClicked?: number
-  emailsBounced?: number
-  emailsUnsubscribed?: number
+  emailBounced?: boolean
+  isDoNotEmail?: boolean
+}
+
+function bucketProspect(p: PardotProspect): string {
+  const score = p.score ?? 0
+  if (p.emailBounced || p.isDoNotEmail) return 'suppression'
+  if (score >= 150) return 'hot'
+  if (score >= 75) return 'warm'
+  if (score >= 25) return 'cold'
+  if (p.lastActivityAt) {
+    const days = (Date.now() - new Date(p.lastActivityAt).getTime()) / (1000 * 60 * 60 * 24)
+    if (days > 90) return 'inactive'
+    if (days > 30) return 'cold'
+  }
+  return 'inactive'
+}
+
+function prospectStatus(p: PardotProspect): string {
+  const score = p.score ?? 0
+  if (p.emailBounced) return 'Bounced'
+  if (p.isDoNotEmail) return 'Unsub'
+  if (score >= 150) return 'Engaged'
+  if (score >= 75) return 'Warm'
+  if (score >= 25) return 'Low Click'
+  return 'Dark'
 }
 
 async function fetchContacts() {
@@ -28,72 +47,36 @@ async function fetchContacts() {
 
     const data = await pardotGet<{ values?: PardotProspect[] }>(
       creds,
-      'prospects?fields=id,firstName,lastName,email,jobTitle,score,grade,lastActivityAt,optedOut,isBounced&limit=500'
+      'prospects?fields=id,email,firstName,lastName,jobTitle,score,grade,lastActivityAt,emailBounced,isDoNotEmail&limit=500'
     )
 
     const prospects = data?.values ?? []
     if (!prospects.length) return null
 
-    const now = Date.now()
-    const thirtyDays = 30 * 24 * 60 * 60 * 1000
-    const ninetyDays = 90 * 24 * 60 * 60 * 1000
-    const sixMonths = 180 * 24 * 60 * 60 * 1000
-
     const buckets = { hot: 0, warm: 0, cold: 0, inactive: 0, suppression: 0, recycle: 0 }
+    for (const p of prospects) {
+      const b = bucketProspect(p)
+      if (b in buckets) buckets[b as keyof typeof buckets]++
+    }
+    buckets.recycle = prospects.filter(p => {
+      const b = bucketProspect(p)
+      return (b === 'cold' || b === 'inactive') && (p.score ?? 0) > 0
+    }).length
 
-    const prospectDetails = prospects.map(p => {
-      const score = p.score ?? 0
-      const lastActivity = p.lastActivityAt ? new Date(p.lastActivityAt).getTime() : 0
-      const daysSinceActivity = lastActivity ? (now - lastActivity) / (1000 * 60 * 60 * 24) : 999
-      const isBounced = p.isBounced ?? false
-      const isOptedOut = p.optedOut ?? false
-
-      let status = 'Cold'
-      if (isBounced || isOptedOut) {
-        buckets.suppression++
-        status = isBounced ? 'Bounced' : 'Unsub'
-      } else if (daysSinceActivity > 180) {
-        buckets.recycle++
-        status = 'Dark'
-      } else if (daysSinceActivity > 90) {
-        buckets.inactive++
-        status = 'Dark'
-      } else if (score >= 60 || daysSinceActivity < 7) {
-        buckets.hot++
-        status = 'Engaged'
-      } else if (score >= 30 || daysSinceActivity < 30) {
-        buckets.warm++
-        status = 'Low Click'
-      } else {
-        buckets.cold++
-        status = 'Low Open'
-      }
-
-      return {
-        id: p.id ?? 0,
+    const prospectDetails = [...prospects]
+      .sort((a, b) => (b.score ?? 0) - (a.score ?? 0))
+      .slice(0, 50)
+      .map((p, i) => ({
+        id: i + 1,
         name: [p.firstName, p.lastName].filter(Boolean).join(' ') || p.email || `Prospect ${p.id}`,
         title: p.jobTitle ?? '—',
-        delivered: 0,
-        opens: 0,
-        clicks: 0,
-        bounces: isBounced ? 1 : 0,
-        unsubs: isOptedOut ? 1 : 0,
-        status,
-      }
-    })
+        score: p.score ?? 0,
+        grade: p.grade ?? '—',
+        status: prospectStatus(p),
+        lastActivity: p.lastActivityAt ?? null,
+      }))
 
-    // Recycle = prospects inactive 6+ months
-    const recycleProspects = prospects.filter(p => {
-      const lastActivity = p.lastActivityAt ? new Date(p.lastActivityAt).getTime() : 0
-      return lastActivity && (now - lastActivity) > sixMonths
-    }).length
-    buckets.recycle = recycleProspects
-
-    const topProspects = prospectDetails
-      .filter(p => p.status !== 'Bounced' && p.status !== 'Unsub')
-      .slice(0, 50)
-
-    return { buckets, prospects: topProspects }
+    return { buckets, prospects: prospectDetails }
   } catch { return null }
 }
 
@@ -210,7 +193,7 @@ export default async function ContactsPage() {
               <table className="w-full text-sm">
                 <thead>
                   <tr className="bg-graphite-800 border-b border-white/5">
-                    {['#', 'Name', 'Title', 'Delivered', 'Opens', 'Clicks', 'Bounce', 'Unsubs', 'Status'].map((h) => (
+                    {['#', 'Name', 'Title', 'Score', 'Grade', 'Status', 'Last Activity'].map((h) => (
                       <th key={h} className="text-left px-4 py-3 text-white/40 text-xs font-mono uppercase tracking-widest whitespace-nowrap">
                         {h}
                       </th>
@@ -219,20 +202,20 @@ export default async function ContactsPage() {
                 </thead>
                 <tbody>
                   {prospectRows.length === 0 && (
-                    <tr><td colSpan={9} className="px-4 py-8 text-center text-white/30 text-sm">No data — connect Salesforce to see prospect activity</td></tr>
+                    <tr><td colSpan={7} className="px-4 py-8 text-center text-white/30 text-sm">No data — connect Pardot to see prospect activity</td></tr>
                   )}
                   {prospectRows.map((p) => (
                     <tr key={p.id} className="bg-graphite-800 border-t border-white/5 hover:bg-white/5 transition-colors">
                       <td className="px-4 py-3 text-white/40 font-mono text-xs">{p.id}</td>
                       <td className="px-4 py-3 text-white/80 font-medium whitespace-nowrap">{p.name}</td>
                       <td className="px-4 py-3 text-white/50 whitespace-nowrap">{p.title}</td>
-                      <td className="px-4 py-3 text-white/70 font-mono">{p.delivered}</td>
-                      <td className="px-4 py-3 text-white/70 font-mono">{p.opens}</td>
-                      <td className="px-4 py-3 text-white/70 font-mono">{p.clicks}</td>
-                      <td className="px-4 py-3 text-white/70 font-mono">{p.bounces}</td>
-                      <td className="px-4 py-3 text-white/70 font-mono">{p.unsubs}</td>
+                      <td className="px-4 py-3 text-white/70 font-mono">{p.score}</td>
+                      <td className="px-4 py-3 text-white/70 font-mono">{p.grade}</td>
                       <td className="px-4 py-3">
                         <ProspectStatusBadge status={p.status} />
+                      </td>
+                      <td className="px-4 py-3 text-white/40 font-mono text-xs whitespace-nowrap">
+                        {p.lastActivity ? new Date(p.lastActivity).toLocaleDateString() : '—'}
                       </td>
                     </tr>
                   ))}

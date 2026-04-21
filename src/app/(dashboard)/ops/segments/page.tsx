@@ -69,8 +69,6 @@ async function fetchSegmentData() {
       .sort((a, b) => b.mqls - a.mqls)
       .slice(0, 10)
 
-    if (!lists.length && !industries.length) return null
-
     return { segments: lists, industries, sfConnected: !!sfCreds, pardotConnected: !!pardotCreds }
   } catch { return null }
 }

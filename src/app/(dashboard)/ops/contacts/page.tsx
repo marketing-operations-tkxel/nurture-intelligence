@@ -1,99 +1,29 @@
 import { auth } from '@/lib/auth'
 import Header from '@/components/layout/Header'
 import { formatNumber } from '@/lib/utils'
-import { getPardotCreds, pardotGet } from '@/lib/sf-api'
-import { prisma } from '@/lib/prisma'
 
-interface PardotProspect {
-  id?: number
-  firstName?: string
-  lastName?: string
-  email?: string
-  jobTitle?: string
-  score?: number
-  grade?: string
-  lastActivityAt?: string
-  emailBounced?: boolean
-  isDoNotEmail?: boolean
+const BASE_URL = process.env.NEXTAUTH_URL || 'https://nurture-intelligence.vercel.app'
+
+type BucketData = Record<string, number>
+interface ProspectRow {
+  id: number; name: string; title: string; score: number
+  grade: string; status: string; lastActivity: string | null
+}
+interface ContactsApiData {
+  buckets: BucketData | null
+  prospects: ProspectRow[]
+  total: number
+  connected: boolean
 }
 
-function bucketProspect(p: PardotProspect): string {
-  const score = p.score ?? 0
-  if (p.emailBounced || p.isDoNotEmail) return 'suppression'
-  if (score >= 150) return 'hot'
-  if (score >= 75) return 'warm'
-  if (score >= 25) return 'cold'
-  if (p.lastActivityAt) {
-    const days = (Date.now() - new Date(p.lastActivityAt).getTime()) / (1000 * 60 * 60 * 24)
-    if (days > 90) return 'inactive'
-    if (days > 30) return 'cold'
-  }
-  return 'inactive'
-}
-
-function prospectStatus(p: PardotProspect): string {
-  const score = p.score ?? 0
-  if (p.emailBounced) return 'Bounced'
-  if (p.isDoNotEmail) return 'Unsub'
-  if (score >= 150) return 'Engaged'
-  if (score >= 75) return 'Warm'
-  if (score >= 25) return 'Low Click'
-  return 'Dark'
-}
-
-// Bypass the SF health-check/refresh when it fails — read stored token directly
-async function getDirectPardotCreds() {
-  const [sfRec, pardotRec] = await Promise.all([
-    prisma.integration.findUnique({ where: { platform: 'salesforce' } }),
-    prisma.integration.findUnique({ where: { platform: 'pardot' } }),
-  ])
-  if (pardotRec?.status !== 'connected') return null
-  const ps = pardotRec.settings as Record<string, string> | null
-  const ss = sfRec?.settings as Record<string, string> | null
-  const businessUnitId = ps?.businessUnitId
-  const accessToken = ss?.accessToken
-  if (!businessUnitId || !accessToken) return null
-  return { accessToken, businessUnitId }
-}
-
-async function fetchContacts() {
+async function fetchContacts(): Promise<ContactsApiData> {
   try {
-    let creds = await getPardotCreds()
-    if (!creds) creds = await getDirectPardotCreds()
-    if (!creds) return null
-
-    const data = await pardotGet<{ values?: PardotProspect[] }>(
-      creds,
-      'prospects?fields=id,email,firstName,lastName,jobTitle,score,grade,lastActivityAt,emailBounced,isDoNotEmail&limit=500'
-    )
-
-    const prospects = data?.values ?? []
-
-    const buckets = { hot: 0, warm: 0, cold: 0, inactive: 0, suppression: 0, recycle: 0 }
-    for (const p of prospects) {
-      const b = bucketProspect(p)
-      if (b in buckets) buckets[b as keyof typeof buckets]++
-    }
-    buckets.recycle = prospects.filter(p => {
-      const b = bucketProspect(p)
-      return (b === 'cold' || b === 'inactive') && (p.score ?? 0) > 0
-    }).length
-
-    const prospectDetails = [...prospects]
-      .sort((a, b) => (b.score ?? 0) - (a.score ?? 0))
-      .slice(0, 50)
-      .map((p, i) => ({
-        id: i + 1,
-        name: [p.firstName, p.lastName].filter(Boolean).join(' ') || p.email || `Prospect ${p.id}`,
-        title: p.jobTitle ?? '—',
-        score: p.score ?? 0,
-        grade: p.grade ?? '—',
-        status: prospectStatus(p),
-        lastActivity: p.lastActivityAt ?? null,
-      }))
-
-    return { buckets, prospects: prospectDetails }
-  } catch { return null }
+    const res = await fetch(`${BASE_URL}/api/contacts`, { cache: 'no-store' })
+    if (!res.ok) return { buckets: null, prospects: [], total: 0, connected: false }
+    return await res.json()
+  } catch {
+    return { buckets: null, prospects: [], total: 0, connected: false }
+  }
 }
 
 const bucketConfig = [
@@ -149,11 +79,10 @@ const bucketConfig = [
 
 export default async function ContactsPage() {
   const session = await auth()
-  const live = await fetchContacts()
-  const isLive = !!live
-
-  const buckets = (live?.buckets ?? { hot: 0, warm: 0, cold: 0, inactive: 0, suppression: 0, recycle: 0 }) as Record<string, number>
-  const prospectRows = live?.prospects ?? []
+  const data = await fetchContacts()
+  const isLive = data.connected
+  const buckets: Record<string, number> = data.buckets ?? { hot: 0, warm: 0, cold: 0, inactive: 0, suppression: 0, recycle: 0 }
+  const prospectRows = data.prospects
 
   return (
     <div className="flex flex-col min-h-full">

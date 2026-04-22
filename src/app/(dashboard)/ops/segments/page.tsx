@@ -1,13 +1,8 @@
 import { auth } from '@/lib/auth'
 import Header from '@/components/layout/Header'
 import { formatPercent, formatCurrency, formatNumber } from '@/lib/utils'
-import { getPardotCreds, getSfCreds, pardotGet, sfQuery } from '@/lib/sf-api'
 
-interface PardotList {
-  id?: number; name?: string; title?: string
-  isDynamic?: boolean; memberCount?: number; totalMembers?: number; description?: string
-}
-interface IndustryRecord { Normalized_Industry__c: string; expr0: number }
+const BASE_URL = process.env.NEXTAUTH_URL || 'https://nurture-intelligence.vercel.app'
 
 type SegmentRow = {
   name: string
@@ -15,52 +10,21 @@ type SegmentRow = {
   deliveryRate: number; openRate: number; clickRate: number; ctr: number
   unsubRate: number; mqlRate: number; sqlRate: number; wonRevenue: number
 }
+interface SegmentsApiData {
+  segments: SegmentRow[]
+  industries: SegmentRow[]
+  sfConnected: boolean
+  pardotConnected: boolean
+}
 
-async function fetchSegmentData() {
+async function fetchSegments(): Promise<SegmentsApiData> {
   try {
-    const [sfCreds, pardotCreds] = await Promise.all([getSfCreds(), getPardotCreds()])
-    if (!pardotCreds && !sfCreds) return null
-
-    const makeRow = (name: string, delivered: number): SegmentRow => ({
-      name, delivered,
-      sent: 0, opens: 0, clicks: 0, bounces: 0,
-      deliveryRate: 0, openRate: 0, clickRate: 0, ctr: 0,
-      unsubRate: 0, mqlRate: 0, sqlRate: 0, wonRevenue: 0,
-    })
-
-    // Only dynamic Pardot lists whose name starts with "Nurture"
-    const listData = pardotCreds
-      ? await pardotGet<{ values?: PardotList[] }>(
-          pardotCreds,
-          'lists?fields=id,name,title,isDynamic,memberCount,totalMembers,description&limit=200'
-        )
-      : null
-
-    const nurtureLists = (listData?.values ?? []).filter(
-      l => l.isDynamic === true && (l.name ?? l.title ?? '').startsWith('Nurture')
-    )
-
-    const segments: SegmentRow[] = nurtureLists
-      .map(l => makeRow(
-        l.name ?? l.title ?? `List ${l.id}`,
-        l.memberCount ?? l.totalMembers ?? 0
-      ))
-      .sort((a, b) => b.delivered - a.delivered)
-
-    // SF industry breakdown from nurture leads
-    const industryResult = sfCreds
-      ? await sfQuery<IndustryRecord>(
-          sfCreds,
-          'SELECT Normalized_Industry__c, COUNT(Id) FROM Lead WHERE Marketing_nurture__c = true AND Normalized_Industry__c != null GROUP BY Normalized_Industry__c ORDER BY COUNT(Id) DESC LIMIT 20'
-        )
-      : null
-
-    const industries: SegmentRow[] = (industryResult?.records ?? []).map(r =>
-      makeRow(r.Normalized_Industry__c, r.expr0)
-    )
-
-    return { segments, industries, sfConnected: !!sfCreds, pardotConnected: !!pardotCreds }
-  } catch { return null }
+    const res = await fetch(`${BASE_URL}/api/segments`, { cache: 'no-store' })
+    if (!res.ok) return { segments: [], industries: [], sfConnected: false, pardotConnected: false }
+    return await res.json()
+  } catch {
+    return { segments: [], industries: [], sfConnected: false, pardotConnected: false }
+  }
 }
 
 const PERF_COLS = ['Sent', 'Delivered', 'Opens', 'Clicks', 'Bounces', 'Delivery %', 'Open %', 'Click %', 'CTR', 'Unsub %', 'MQL %', 'SQL %', 'Won Revenue']
@@ -88,11 +52,10 @@ function PerfRow({ row }: { row: SegmentRow }) {
 
 export default async function SegmentsPage() {
   const session = await auth()
-  const live = await fetchSegmentData()
-  const isLive = !!live
-
-  const segments = live?.segments ?? []
-  const industries = live?.industries ?? []
+  const data = await fetchSegments()
+  const isLive = data.pardotConnected || data.sfConnected
+  const segments = data.segments
+  const industries = data.industries
 
   return (
     <div className="flex flex-col min-h-full">

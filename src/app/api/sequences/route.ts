@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getPardotCreds, pardotGet, pardotStats, pct } from '@/lib/sf-api'
 import { prisma } from '@/lib/prisma'
 
-const NURTURE_LIST_IDS = new Set([338651, 338939, 412789, 412798, 412807, 412810, 509437, 619875])
+const NURTURE_LIST_IDS = new Set([338651, 338939, 412789, 412798, 412807, 412810, 509437])
 
 interface ListEmail {
   id?: number

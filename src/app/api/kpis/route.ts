@@ -1,11 +1,10 @@
 import { NextResponse } from 'next/server'
-import { getSfCreds, getPardotCreds, sfQuery, sfCount, pardotGet, pardotStats, pct } from '@/lib/sf-api'
+import { getSfCreds, getPardotCreds, sfQuery, sfCount, pardotGet, pardotStats, pct, getNurtureAudienceCount } from '@/lib/sf-api'
 
 interface OppRecord { Amount: number; StageName: string }
 interface AggRecord { expr0: number }
 interface ListEmail { id?: number; name?: string; sentAt?: string; isSent?: boolean }
 interface ListEmailsResponse { values?: ListEmail[] }
-const TOTAL_NURTURE_AUDIENCE = 6421
 
 export async function GET() {
   const [sfCreds, pardotCreds] = await Promise.all([getSfCreds(), getPardotCreds()])
@@ -61,10 +60,12 @@ export async function GET() {
 
   const totalBounces = totalHardBounces + totalSoftBounces
 
-  const totalProspects = TOTAL_NURTURE_AUDIENCE
-
+  const totalAudience = pardotCreds ? await getNurtureAudienceCount(pardotCreds) : 0
   const prospectsOpenedAny = totalUniqueOpens
-  const prospectsNoEngagement = Math.max(0, totalProspects - prospectsOpenedAny)
+  const prospectsClickedAny = totalUniqueClicks
+  const prospectsNoEngagement = Math.max(0, totalAudience - prospectsOpenedAny)
+  const engagedAudience = prospectsOpenedAny
+  const engagedRate = totalAudience > 0 ? parseFloat(((prospectsOpenedAny / totalAudience) * 100).toFixed(1)) : 0
 
   return NextResponse.json({
     // period
@@ -100,11 +101,11 @@ export async function GET() {
     spamCount: totalSpam,
 
     // Audience
-    totalAudience: totalProspects,
-    engagedAudience: prospectsOpenedAny,
-    engagedRate: pct(prospectsOpenedAny, totalProspects),
+    totalAudience,
+    engagedAudience,
+    engagedRate,
     prospectsOpenedAny,
-    prospectsClickedAny: totalUniqueClicks,
+    prospectsClickedAny,
     prospectsNoEngagement,
 
     // Connected status

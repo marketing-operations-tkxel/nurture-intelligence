@@ -182,3 +182,36 @@ export function pct(numerator: number, denominator: number, decimals = 1): numbe
   if (!denominator) return 0
   return parseFloat(((numerator / denominator) * 100).toFixed(decimals))
 }
+
+// ─── Pardot list membership count (handles pagination) ───────────────────────
+
+export async function countListMembers(creds: PardotCreds, listId: number): Promise<number> {
+  let count = 0
+  let url: string | null =
+    `https://pi.pardot.com/api/v5/objects/list-memberships?fields=id&listId=${listId}&limit=1000`
+
+  while (url) {
+    try {
+      const res = await fetch(url, {
+        headers: {
+          Authorization: `Bearer ${creds.accessToken}`,
+          'Pardot-Business-Unit-Id': creds.businessUnitId,
+        },
+        signal: AbortSignal.timeout(8000),
+      })
+      if (!res.ok) break
+      const data = await res.json() as { values?: unknown[]; nextPageUrl?: string | null }
+      count += data.values?.length ?? 0
+      url = data.nextPageUrl ?? null
+    } catch {
+      break
+    }
+  }
+  return count
+}
+
+export async function getNurtureAudienceCount(creds: PardotCreds): Promise<number> {
+  const ALL_NURTURE_LIST_IDS = [338651, 338939, 412789, 412798, 412807, 412810, 509437, 619875]
+  const counts = await Promise.all(ALL_NURTURE_LIST_IDS.map(id => countListMembers(creds, id)))
+  return counts.reduce((a, b) => a + b, 0)
+}

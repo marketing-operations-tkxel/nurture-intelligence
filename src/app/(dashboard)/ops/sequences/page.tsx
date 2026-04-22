@@ -2,6 +2,8 @@ import { auth } from '@/lib/auth'
 import Header from '@/components/layout/Header'
 import { formatNumber, formatPercent, formatCurrency, cn } from '@/lib/utils'
 
+export const dynamic = 'force-dynamic'
+
 const BASE_URL = 'https://nurture-intelligence.vercel.app'
 
 interface SequenceRow {

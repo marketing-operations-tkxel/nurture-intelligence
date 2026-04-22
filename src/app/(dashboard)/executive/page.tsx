@@ -7,6 +7,8 @@ import DualTrendChart from '@/components/charts/DualTrendChart'
 import { formatNumber, formatCurrency, formatPercent } from '@/lib/utils'
 import { getSfCreds, getPardotCreds, sfQuery, sfCount, pardotGet, pardotStats, pct } from '@/lib/sf-api'
 
+export const dynamic = 'force-dynamic'
+
 const MONTH_NAMES = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
 
 // ─── Fetch helpers ────────────────────────────────────────────────────────────

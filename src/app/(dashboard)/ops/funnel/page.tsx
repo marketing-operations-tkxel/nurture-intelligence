@@ -5,6 +5,8 @@ import KpiCard from '@/components/ui/KpiCard'
 import { formatPercent } from '@/lib/utils'
 import { getSfCreds, getPardotCreds, sfCount, pardotGet } from '@/lib/sf-api'
 
+export const dynamic = 'force-dynamic'
+
 async function fetchFunnelData() {
   try {
     const [sfCreds, pardotCreds] = await Promise.all([getSfCreds(), getPardotCreds()])

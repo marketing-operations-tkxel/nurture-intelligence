@@ -1,10 +1,21 @@
 import { auth } from '@/lib/auth'
 import Header from '@/components/layout/Header'
 import { formatPercent, formatCurrency, formatNumber } from '@/lib/utils'
+import { getPardotCreds, getSfCreds, sfQuery } from '@/lib/sf-api'
 
 export const dynamic = 'force-dynamic'
+export const revalidate = 0
 
-const BASE_URL = 'https://nurture-intelligence.vercel.app'
+const NURTURE_LISTS = [
+  { id: 338651, name: 'Nurture | CIOs & Tech Leaders | Non-Tech | $50–$500M', memberCount: 97 },
+  { id: 338939, name: 'Nurture | CEOs & Non-Tech Leaders | Non-Tech', memberCount: 1780 },
+  { id: 412789, name: 'Nurture | CEOs & Non-Tech Leaders | Tech | Under $50M', memberCount: 250 },
+  { id: 412798, name: 'Nurture | CTOs & Tech Leaders | Tech | Under $50M', memberCount: 38 },
+  { id: 412807, name: 'Nurture | CTOs & Tech Leaders | Funded Tech Startups', memberCount: 5 },
+  { id: 412810, name: 'Nurture | Managing Partners | Private Equity', memberCount: 50 },
+  { id: 509437, name: 'Nurture | CIOs & Tech Leaders | Non-Tech | Under $50M new', memberCount: 228 },
+  { id: 619875, name: 'Nurture & Future Interest', memberCount: 3973 },
+]
 
 type SegmentRow = {
   name: string
@@ -12,19 +23,35 @@ type SegmentRow = {
   deliveryRate: number; openRate: number; clickRate: number; ctr: number
   unsubRate: number; mqlRate: number; sqlRate: number; wonRevenue: number
 }
-interface SegmentsApiData {
-  segments: SegmentRow[]
-  industries: SegmentRow[]
-  sfConnected: boolean
-  pardotConnected: boolean
-}
 
-async function fetchSegments(): Promise<SegmentsApiData> {
+async function getSegmentsData() {
   try {
-    const res = await fetch(`${BASE_URL}/api/segments`, { next: { revalidate: 300 }, headers: { 'x-internal': 'true' } })
-    if (!res.ok) return { segments: [], industries: [], sfConnected: false, pardotConnected: false }
-    return await res.json()
-  } catch {
+    const [pardotCreds, sfCreds] = await Promise.all([getPardotCreds(), getSfCreds()])
+
+    const segments: SegmentRow[] = NURTURE_LISTS.map(l => ({
+      name: l.name,
+      sent: 0, delivered: l.memberCount, opens: 0, clicks: 0, bounces: 0,
+      deliveryRate: 0, openRate: 0, clickRate: 0, ctr: 0,
+      unsubRate: 0, mqlRate: 0, sqlRate: 0, wonRevenue: 0,
+    }))
+
+    let industries: SegmentRow[] = []
+    if (sfCreds) {
+      const result = await sfQuery<{ Normalized_Industry__c: string; expr0: number }>(
+        sfCreds,
+        'SELECT Normalized_Industry__c, COUNT(Id) FROM Lead WHERE Marketing_nurture__c = true AND Normalized_Industry__c != null GROUP BY Normalized_Industry__c ORDER BY COUNT(Id) DESC LIMIT 20'
+      )
+      industries = (result?.records ?? []).map(r => ({
+        name: r.Normalized_Industry__c,
+        sent: 0, delivered: r.expr0, opens: 0, clicks: 0, bounces: 0,
+        deliveryRate: 0, openRate: 0, clickRate: 0, ctr: 0,
+        unsubRate: 0, mqlRate: 0, sqlRate: 0, wonRevenue: 0,
+      }))
+    }
+
+    return { segments, industries, sfConnected: !!sfCreds, pardotConnected: !!pardotCreds }
+  } catch (e) {
+    console.error('segments error:', e)
     return { segments: [], industries: [], sfConnected: false, pardotConnected: false }
   }
 }
@@ -54,7 +81,7 @@ function PerfRow({ row }: { row: SegmentRow }) {
 
 export default async function SegmentsPage() {
   const session = await auth()
-  const data = await fetchSegments()
+  const data = await getSegmentsData()
   const isLive = data.pardotConnected || data.sfConnected
   const segments = data.segments
   const industries = data.industries

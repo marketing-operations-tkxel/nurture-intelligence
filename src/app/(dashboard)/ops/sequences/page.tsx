@@ -1,45 +1,143 @@
 import { auth } from '@/lib/auth'
 import Header from '@/components/layout/Header'
 import { formatNumber, formatPercent, formatCurrency, cn } from '@/lib/utils'
+import { getPardotCreds, pardotGet, pardotStats, pct } from '@/lib/sf-api'
+import { prisma } from '@/lib/prisma'
 
 export const dynamic = 'force-dynamic'
+export const revalidate = 0
 
-const BASE_URL = 'https://nurture-intelligence.vercel.app'
+const NURTURE_LIST_IDS = new Set([338651, 338939, 412789, 412798, 412807, 412810, 509437, 619875])
 
-interface SequenceRow {
-  id?: number; name: string; segment: string; status: string
-  sent: number; delivered: number; opens: number; clicks: number; bounces: number; unsubs: number
-  deliveryRate: number; openRate: number; clickRate: number; ctr: number; bounceRate: number; unsubRate: number
-  mqlRate: number; sqlRate: number; wonRevenue: number; signal: string; sentAt?: string
+interface ListEmail { id?: number; name?: string; subject?: string; sentAt?: string; isSent?: boolean }
+interface ListEmailDetail {
+  id?: number
+  recipientLists?: Array<{ id?: number }> | { values?: Array<{ id?: number }> }
 }
-interface SubjectRow {
-  subject: string; delivered: number; opens: number; openRate: number
-  clicks: number; clickRate: number; unsubs: number; bounces: number
-}
-interface TitleRow {
-  title: string; delivered: number; opens: number; openRate: number
-  clicks: number; clickRate: number; unsubs: number; bounces: number
-}
-interface SequencesApiData {
-  sequences: SequenceRow[]
-  subjectLines: SubjectRow[]
-  prospectTitles: TitleRow[]
-  connected: boolean
-}
+interface PardotProspect { id?: number; jobTitle?: string; score?: number }
 
-async function fetchSequences(): Promise<SequencesApiData> {
+async function getSignalThresholds() {
   try {
-    const res = await fetch(`${BASE_URL}/api/sequences`, { next: { revalidate: 300 }, headers: { 'x-internal': 'true' } })
-    if (!res.ok) return { sequences: [], subjectLines: [], prospectTitles: [], connected: false }
-    return await res.json()
+    const records = await prisma.benchmark.findMany({
+      where: { metric: { in: ['signal_hot_threshold', 'signal_warm_threshold', 'signal_cold_threshold', 'signal_atrisk_bounce'] } },
+    })
+    const map = Object.fromEntries(records.map(b => [b.metric, b.warningThreshold ?? 0]))
+    return { hot: map['signal_hot_threshold'] ?? 20, warm: map['signal_warm_threshold'] ?? 12, cold: map['signal_cold_threshold'] ?? 5, atRiskBounce: map['signal_atrisk_bounce'] ?? 5 }
   } catch {
+    return { hot: 20, warm: 12, cold: 5, atRiskBounce: 5 }
+  }
+}
+
+async function getSequencesData() {
+  try {
+    const [creds, thresholds] = await Promise.all([getPardotCreds(), getSignalThresholds()])
+    if (!creds) return { sequences: [], subjectLines: [], prospectTitles: [], connected: false }
+
+    function signal(openRate: number, bounceRate: number): string {
+      if (bounceRate >= thresholds.atRiskBounce) return 'At Risk'
+      if (openRate >= thresholds.hot) return 'Hot'
+      if (openRate >= thresholds.warm) return 'Warm'
+      if (openRate >= thresholds.cold) return 'Cold'
+      return 'At Risk'
+    }
+
+    const [listEmailsData, prospectData] = await Promise.all([
+      pardotGet<{ values?: ListEmail[] }>(creds, 'list-emails?fields=id,name,subject,sentAt,isSent&limit=200'),
+      pardotGet<{ values?: PardotProspect[] }>(creds, 'prospects?fields=id,jobTitle,score&limit=1000'),
+    ])
+
+    const allSentEmails = (listEmailsData?.values ?? [])
+      .filter(e => e.isSent === true && e.id != null)
+      .sort((a, b) => (b.sentAt ?? '').localeCompare(a.sentAt ?? ''))
+      .slice(0, 50)
+
+    const detailResults = await Promise.all(
+      allSentEmails.map(e => pardotGet<ListEmailDetail>(creds, `list-emails/${e.id}?fields=id,recipientLists.id`))
+    )
+
+    const nurtureIndices = allSentEmails.reduce<number[]>((acc, _e, i) => {
+      const detail = detailResults[i]
+      if (!detail) return acc
+      const lists: Array<{ id?: number }> = Array.isArray(detail.recipientLists)
+        ? detail.recipientLists
+        : (detail.recipientLists as { values?: Array<{ id?: number }> })?.values ?? []
+      if (lists.some(l => l.id != null && NURTURE_LIST_IDS.has(l.id))) acc.push(i)
+      return acc
+    }, [])
+
+    const sentEmails = nurtureIndices.length > 0
+      ? nurtureIndices.map(i => allSentEmails[i])
+      : allSentEmails
+
+    const statsResults = await Promise.all(sentEmails.map(e => pardotStats(creds, e.id!)))
+
+    const sequences = sentEmails
+      .map((e, i) => {
+        const s = statsResults[i]
+        if (!s) return null
+        const sent = s.sent ?? 0
+        const delivered = s.delivered ?? 0
+        const opens = s.uniqueOpens ?? 0
+        const clicks = s.uniqueClicks ?? 0
+        const bounces = (s.hardBounced ?? 0) + (s.softBounced ?? 0)
+        const unsubs = s.optOuts ?? 0
+        const deliveryRate = pct(delivered, sent)
+        const openRate = pct(opens, delivered)
+        const clickRate = pct(clicks, delivered)
+        const ctr = pct(clicks, opens)
+        const bounceRate = pct(bounces, sent)
+        const unsubRate = pct(unsubs, delivered)
+        return {
+          id: e.id, name: e.subject ?? e.name ?? `Email ${e.id}`,
+          segment: 'All Prospects', status: 'active',
+          sent, delivered, opens, clicks, bounces, unsubs,
+          deliveryRate, openRate, clickRate, ctr, bounceRate, unsubRate,
+          mqlRate: 0, sqlRate: 0, wonRevenue: 0,
+          signal: signal(openRate, bounceRate), sentAt: e.sentAt,
+        }
+      })
+      .filter((s): s is NonNullable<typeof s> => s !== null)
+      .sort((a, b) => b.openRate - a.openRate)
+
+    const subjectLines = [...sequences]
+      .sort((a, b) => b.opens - a.opens)
+      .slice(0, 20)
+      .map(s => ({
+        subject: s.name, delivered: s.delivered, opens: s.opens,
+        openRate: s.openRate, clicks: s.clicks, clickRate: s.clickRate,
+        unsubs: s.unsubs, bounces: s.bounces,
+      }))
+
+    const prospects = prospectData?.values ?? []
+    const titleMap: Record<string, { delivered: number; opens: number; clicks: number }> = {}
+    for (const p of prospects) {
+      const title = p.jobTitle?.trim() || 'Unknown'
+      if (!titleMap[title]) titleMap[title] = { delivered: 0, opens: 0, clicks: 0 }
+      titleMap[title].delivered++
+      if ((p.score ?? 0) > 50) titleMap[title].opens++
+      if ((p.score ?? 0) > 100) titleMap[title].clicks++
+    }
+
+    const prospectTitles = Object.entries(titleMap)
+      .map(([title, v]) => ({
+        title, delivered: v.delivered, opens: v.opens,
+        openRate: pct(v.opens, v.delivered),
+        clicks: v.clicks, clickRate: pct(v.clicks, v.delivered),
+        unsubs: 0, bounces: 0,
+      }))
+      .sort((a, b) => b.delivered - a.delivered)
+      .slice(0, 15)
+
+    return { sequences, subjectLines, prospectTitles, connected: true }
+  } catch (e) {
+    console.error('sequences error:', e)
     return { sequences: [], subjectLines: [], prospectTitles: [], connected: false }
   }
 }
 
 export default async function SequencesPage() {
   const session = await auth()
-  const data = await fetchSequences()
+  const data = await getSequencesData()
   const sequences = data.sequences
   const subjectLines = data.subjectLines
   const prospectTitles = data.prospectTitles

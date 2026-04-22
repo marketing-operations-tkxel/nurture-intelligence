@@ -2,6 +2,7 @@ import { auth } from '@/lib/auth'
 import Header from '@/components/layout/Header'
 import { formatNumber } from '@/lib/utils'
 import { getPardotCreds, pardotGet } from '@/lib/sf-api'
+import { prisma } from '@/lib/prisma'
 
 interface PardotProspect {
   id?: number
@@ -40,9 +41,25 @@ function prospectStatus(p: PardotProspect): string {
   return 'Dark'
 }
 
+// Bypass the SF health-check/refresh when it fails — read stored token directly
+async function getDirectPardotCreds() {
+  const [sfRec, pardotRec] = await Promise.all([
+    prisma.integration.findUnique({ where: { platform: 'salesforce' } }),
+    prisma.integration.findUnique({ where: { platform: 'pardot' } }),
+  ])
+  if (pardotRec?.status !== 'connected') return null
+  const ps = pardotRec.settings as Record<string, string> | null
+  const ss = sfRec?.settings as Record<string, string> | null
+  const businessUnitId = ps?.businessUnitId
+  const accessToken = ss?.accessToken
+  if (!businessUnitId || !accessToken) return null
+  return { accessToken, businessUnitId }
+}
+
 async function fetchContacts() {
   try {
-    const creds = await getPardotCreds()
+    let creds = await getPardotCreds()
+    if (!creds) creds = await getDirectPardotCreds()
     if (!creds) return null
 
     const data = await pardotGet<{ values?: PardotProspect[] }>(

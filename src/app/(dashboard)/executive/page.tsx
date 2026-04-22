@@ -34,7 +34,7 @@ async function fetchKpis() {
       sfCreds ? sfCount(sfCreds, 'SELECT COUNT() FROM Lead WHERE Non_MQL_Date__c != null') : 0,
       sfCreds ? sfCount(sfCreds, 'SELECT COUNT() FROM Lead WHERE Not_Accepted__c = false') : 0,
       sfCreds ? sfCount(sfCreds, "SELECT COUNT() FROM Task WHERE CallType != null AND Status = 'Completed'") : 0,
-      sfCreds ? sfQuery<{ expr0: number }>(sfCreds, 'SELECT SUM(Amount) FROM Opportunity WHERE IsWon = true AND IsClosed = true AND CloseDate = LAST_N_DAYS:365') : null,
+      sfCreds ? sfQuery<{ expr0: number }>(sfCreds, 'SELECT SUM(Amount) FROM Opportunity WHERE IsWon = true AND IsClosed = true') : null,
       sfCreds ? sfQuery<{ expr0: number }>(sfCreds, 'SELECT SUM(Amount) FROM Opportunity WHERE IsClosed = false') : null,
       sfCreds ? sfCount(sfCreds, 'SELECT COUNT() FROM Opportunity WHERE CreatedDate = THIS_MONTH') : 0,
     ])

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { getPardotCreds, getSfCreds, pardotGet, pardotStats, sfQuery, pct } from '@/lib/sf-api'
+import { getPardotCreds, pardotGet, pardotStats, pct } from '@/lib/sf-api'
 import { prisma } from '@/lib/prisma'
 
 interface ListEmail {
@@ -9,16 +9,19 @@ interface ListEmail {
   sentAt?: string
   isSent?: boolean
   campaignId?: number
+  listIds?: number[]
 }
 
-interface PardotCampaign {
+interface PardotListMeta {
   id?: number
   name?: string
+  isDynamic?: boolean
 }
 
-interface TitleRecord {
-  Normalize_Title_del__c: string
-  expr0: number
+interface PardotProspect {
+  id?: number
+  jobTitle?: string
+  score?: number
 }
 
 async function getSignalThresholds() {
@@ -39,13 +42,8 @@ async function getSignalThresholds() {
 }
 
 export async function GET(req: NextRequest) {
-  const { searchParams } = req.nextUrl
-  const dateRange = searchParams.get('dateRange') ?? '30d'
-  const segmentFilter = searchParams.get('segment') ?? ''
-
-  const [pardotCreds, sfCreds, thresholds] = await Promise.all([
+  const [pardotCreds, thresholds] = await Promise.all([
     getPardotCreds(),
-    getSfCreds(),
     getSignalThresholds(),
   ])
 
@@ -53,7 +51,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ sequences: [], subjectLines: [], prospectTitles: [], connected: false })
   }
 
-  function signal(openRate: number, clickRate: number, bounceRate: number): string {
+  function signal(openRate: number, bounceRate: number): string {
     if (bounceRate >= thresholds.atRiskBounce) return 'At Risk'
     if (openRate >= thresholds.hot) return 'Hot'
     if (openRate >= thresholds.warm) return 'Warm'
@@ -61,30 +59,30 @@ export async function GET(req: NextRequest) {
     return 'At Risk'
   }
 
-  // Find the tkxel | Nurture campaign
-  const campaignsData = await pardotGet<{ values?: PardotCampaign[] }>(
-    pardotCreds,
-    'campaigns?fields=id,name&limit=200'
-  )
-  const nurtureCampaign = (campaignsData?.values ?? []).find(
-    c => c.name?.toLowerCase().includes('nurture')
-  )
-  const nurtureCampaignId = nurtureCampaign?.id
+  // Get nurture dynamic list IDs to filter list-emails
+  const [listMeta, listEmailsData, prospectData] = await Promise.all([
+    pardotGet<{ values?: PardotListMeta[] }>(pardotCreds, 'lists?fields=id,name,isDynamic&limit=200'),
+    pardotGet<{ values?: ListEmail[] }>(pardotCreds, 'list-emails?fields=id,name,subject,sentAt,isSent,campaignId,listIds&limit=200'),
+    pardotGet<{ values?: PardotProspect[] }>(pardotCreds, 'prospects?fields=id,jobTitle,score&limit=1000'),
+  ])
 
-  const listEmailsData = await pardotGet<{ values?: ListEmail[] }>(
-    pardotCreds,
-    'list-emails?fields=id,name,subject,sentAt,isSent,campaignId&limit=200'
+  const nurtureListIds = new Set(
+    (listMeta?.values ?? [])
+      .filter(l => l.isDynamic === true && (l.name ?? '').startsWith('Nurture'))
+      .map(l => l.id)
+      .filter((id): id is number => id != null)
   )
 
   const allSentEmails = (listEmailsData?.values ?? [])
     .filter(e => e.isSent === true && e.id != null)
     .sort((a, b) => (b.sentAt ?? '').localeCompare(a.sentAt ?? ''))
 
-  // Filter to nurture campaign only when a campaign ID is found
-  const sentEmails = (nurtureCampaignId
-    ? allSentEmails.filter(e => e.campaignId === nurtureCampaignId)
+  // Filter to nurture list emails; fall back to all sent emails if field not supported
+  const filtered = nurtureListIds.size > 0
+    ? allSentEmails.filter(e => (e.listIds ?? []).some(id => nurtureListIds.has(id)))
     : allSentEmails
-  ).slice(0, 50)
+
+  const sentEmails = (filtered.length > 0 ? filtered : allSentEmails).slice(0, 50)
 
   const statsResults = await Promise.all(
     sentEmails.map(e => pardotStats(pardotCreds, e.id!))
@@ -101,14 +99,12 @@ export async function GET(req: NextRequest) {
       const bounces = (s.hardBounced ?? 0) + (s.softBounced ?? 0)
       const unsubs = s.optOuts ?? 0
       const spam = s.spamComplaints ?? 0
-
       const deliveryRate = pct(delivered, sent)
       const openRate = pct(opens, delivered)
       const clickRate = pct(clicks, delivered)
       const ctr = pct(clicks, opens)
       const bounceRate = pct(bounces, sent)
       const unsubRate = pct(unsubs, delivered)
-
       return {
         id: e.id,
         name: e.subject ?? e.name ?? `Email ${e.id}`,
@@ -117,7 +113,7 @@ export async function GET(req: NextRequest) {
         sent, delivered, opens, clicks, bounces, unsubs, spam,
         deliveryRate, openRate, clickRate, ctr, bounceRate, unsubRate,
         mqlRate: 0, sqlRate: 0, wonRevenue: 0,
-        signal: signal(openRate, clickRate, bounceRate),
+        signal: signal(openRate, bounceRate),
         sentAt: e.sentAt,
       }
     })
@@ -128,53 +124,35 @@ export async function GET(req: NextRequest) {
     .sort((a, b) => b.opens - a.opens)
     .slice(0, 20)
     .map(s => ({
-      subject: s.name,
-      delivered: s.delivered,
-      opens: s.opens,
-      openRate: s.openRate,
-      clicks: s.clicks,
-      clickRate: s.clickRate,
-      unsubs: s.unsubs,
-      bounces: s.bounces,
+      subject: s.name, delivered: s.delivered, opens: s.opens,
+      openRate: s.openRate, clicks: s.clicks, clickRate: s.clickRate,
+      unsubs: s.unsubs, bounces: s.bounces,
     }))
 
-  // Prospect title performance via Salesforce normalized title field
-  let prospectTitles: Array<{
-    title: string; delivered: number; opens: number; openRate: number
-    clicks: number; clickRate: number; unsubs: number; bounces: number
-  }> = []
-
-  if (sfCreds) {
-    const [totalResult, engagedResult] = await Promise.all([
-      sfQuery<TitleRecord>(
-        sfCreds,
-        'SELECT Normalize_Title_del__c, COUNT(Id) FROM Lead WHERE Marketing_nurture__c = true AND Normalize_Title_del__c != null GROUP BY Normalize_Title_del__c ORDER BY COUNT(Id) DESC LIMIT 20'
-      ),
-      sfQuery<TitleRecord>(
-        sfCreds,
-        'SELECT Normalize_Title_del__c, COUNT(Id) FROM Lead WHERE Marketing_nurture__c = true AND Normalize_Title_del__c != null AND pi__score__c > 0 GROUP BY Normalize_Title_del__c ORDER BY COUNT(Id) DESC LIMIT 20'
-      ),
-    ])
-
-    const engagedMap = Object.fromEntries(
-      (engagedResult?.records ?? []).map(r => [r.Normalize_Title_del__c, r.expr0])
-    )
-
-    prospectTitles = (totalResult?.records ?? []).map(r => {
-      const total = r.expr0
-      const engaged = engagedMap[r.Normalize_Title_del__c] ?? 0
-      return {
-        title: r.Normalize_Title_del__c,
-        delivered: total,
-        opens: engaged,
-        openRate: pct(engaged, total),
-        clicks: 0,
-        clickRate: 0,
-        unsubs: 0,
-        bounces: 0,
-      }
-    })
+  // Prospect title performance — Pardot prospects grouped by jobTitle in JS
+  const prospects = prospectData?.values ?? []
+  const titleMap: Record<string, { delivered: number; opens: number; clicks: number }> = {}
+  for (const p of prospects) {
+    const title = p.jobTitle?.trim() || 'Unknown'
+    if (!titleMap[title]) titleMap[title] = { delivered: 0, opens: 0, clicks: 0 }
+    titleMap[title].delivered++
+    if ((p.score ?? 0) > 50) titleMap[title].opens++
+    if ((p.score ?? 0) > 100) titleMap[title].clicks++
   }
+
+  const prospectTitles = Object.entries(titleMap)
+    .map(([title, v]) => ({
+      title,
+      delivered: v.delivered,
+      opens: v.opens,
+      openRate: pct(v.opens, v.delivered),
+      clicks: v.clicks,
+      clickRate: pct(v.clicks, v.delivered),
+      unsubs: 0,
+      bounces: 0,
+    }))
+    .sort((a, b) => b.delivered - a.delivered)
+    .slice(0, 15)
 
   return NextResponse.json({ sequences, subjectLines, prospectTitles, connected: true })
 }

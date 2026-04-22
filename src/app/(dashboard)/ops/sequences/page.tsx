@@ -1,12 +1,12 @@
 import { auth } from '@/lib/auth'
 import Header from '@/components/layout/Header'
 import { formatNumber, formatPercent, formatCurrency, cn } from '@/lib/utils'
-import { getPardotCreds, getSfCreds, pardotGet, pardotStats, sfQuery, pct } from '@/lib/sf-api'
+import { getPardotCreds, pardotGet, pardotStats, pct } from '@/lib/sf-api'
 import { prisma } from '@/lib/prisma'
 
-type ListEmail = { id?: number; subject?: string; name?: string; sentAt?: string; isSent?: boolean; campaignId?: number }
-type PardotCampaign = { id?: number; name?: string }
-type TitleRecord = { Normalize_Title_del__c: string; expr0: number }
+type ListEmail = { id?: number; subject?: string; name?: string; sentAt?: string; isSent?: boolean; listIds?: number[] }
+type PardotListMeta = { id?: number; name?: string; isDynamic?: boolean }
+type PardotProspect = { id?: number; jobTitle?: string; score?: number }
 
 async function getSignalThresholds() {
   try {
@@ -33,23 +33,27 @@ async function fetchSequences() {
       return 'At Risk'
     }
 
-    // Find tkxel | Nurture campaign
-    const campaignsData = await pardotGet<{ values?: PardotCampaign[] }>(pardotCreds, 'campaigns?fields=id,name&limit=200')
-    const nurtureCampaignId = (campaignsData?.values ?? []).find(c => c.name?.toLowerCase().includes('nurture'))?.id
+    const [listMeta, listEmailsData] = await Promise.all([
+      pardotGet<{ values?: PardotListMeta[] }>(pardotCreds, 'lists?fields=id,name,isDynamic&limit=200'),
+      pardotGet<{ values?: ListEmail[] }>(pardotCreds, 'list-emails?fields=id,name,subject,sentAt,isSent,listIds&limit=200'),
+    ])
 
-    const data = await pardotGet<{ values?: ListEmail[] }>(
-      pardotCreds,
-      'list-emails?fields=id,name,subject,sentAt,isSent,campaignId&limit=200'
+    const nurtureListIds = new Set(
+      (listMeta?.values ?? [])
+        .filter(l => l.isDynamic === true && (l.name ?? '').startsWith('Nurture'))
+        .map(l => l.id)
+        .filter((id): id is number => id != null)
     )
 
-    const allSent = (data?.values ?? [])
+    const allSent = (listEmailsData?.values ?? [])
       .filter(e => e.isSent === true && e.id != null)
       .sort((a, b) => (b.sentAt ?? '').localeCompare(a.sentAt ?? ''))
 
-    const sentEmails = (nurtureCampaignId
-      ? allSent.filter(e => e.campaignId === nurtureCampaignId)
+    const filtered = nurtureListIds.size > 0
+      ? allSent.filter(e => (e.listIds ?? []).some(id => nurtureListIds.has(id)))
       : allSent
-    ).slice(0, 50)
+
+    const sentEmails = (filtered.length > 0 ? filtered : allSent).slice(0, 50)
 
     if (!sentEmails.length) return null
 
@@ -82,14 +86,17 @@ async function fetchSequences() {
         }
       })
       .filter((s): s is NonNullable<typeof s> => s !== null)
-      .sort((a, b) => b.sent - a.sent)
+      .sort((a, b) => b.openRate - a.openRate)
 
-    const subjectLines = sequences.slice(0, 20).map(s => ({
-      subject: s.name,
-      delivered: s.delivered, opens: s.opens,
-      openRate: s.openRate, clicks: s.clicks,
-      clickRate: s.clickRate, unsubs: s.unsubs, bounces: s.bounces,
-    }))
+    const subjectLines = [...sequences]
+      .sort((a, b) => b.opens - a.opens)
+      .slice(0, 20)
+      .map(s => ({
+        subject: s.name,
+        delivered: s.delivered, opens: s.opens,
+        openRate: s.openRate, clicks: s.clicks,
+        clickRate: s.clickRate, unsubs: s.unsubs, bounces: s.bounces,
+      }))
 
     return { sequences, subjectLines }
   } catch { return null }
@@ -97,29 +104,37 @@ async function fetchSequences() {
 
 async function fetchProspectTitles() {
   try {
-    const sfCreds = await getSfCreds()
-    if (!sfCreds) return []
+    const pardotCreds = await getPardotCreds()
+    if (!pardotCreds) return []
 
-    const [totalResult, engagedResult] = await Promise.all([
-      sfQuery<TitleRecord>(sfCreds, 'SELECT Normalize_Title_del__c, COUNT(Id) FROM Lead WHERE Marketing_nurture__c = true AND Normalize_Title_del__c != null GROUP BY Normalize_Title_del__c ORDER BY COUNT(Id) DESC LIMIT 20'),
-      sfQuery<TitleRecord>(sfCreds, 'SELECT Normalize_Title_del__c, COUNT(Id) FROM Lead WHERE Marketing_nurture__c = true AND Normalize_Title_del__c != null AND pi__score__c > 0 GROUP BY Normalize_Title_del__c ORDER BY COUNT(Id) DESC LIMIT 20'),
-    ])
-
-    const engagedMap = Object.fromEntries(
-      (engagedResult?.records ?? []).map(r => [r.Normalize_Title_del__c, r.expr0])
+    const data = await pardotGet<{ values?: PardotProspect[] }>(
+      pardotCreds,
+      'prospects?fields=id,jobTitle,score&limit=1000'
     )
 
-    return (totalResult?.records ?? []).map(r => {
-      const total = r.expr0
-      const engaged = engagedMap[r.Normalize_Title_del__c] ?? 0
-      return {
-        title: r.Normalize_Title_del__c,
-        delivered: total,
-        opens: engaged,
-        openRate: pct(engaged, total),
-        clicks: 0, clickRate: 0, unsubs: 0, bounces: 0,
-      }
-    })
+    const prospects = data?.values ?? []
+    const titleMap: Record<string, { delivered: number; opens: number; clicks: number }> = {}
+    for (const p of prospects) {
+      const title = p.jobTitle?.trim() || 'Unknown'
+      if (!titleMap[title]) titleMap[title] = { delivered: 0, opens: 0, clicks: 0 }
+      titleMap[title].delivered++
+      if ((p.score ?? 0) > 50) titleMap[title].opens++
+      if ((p.score ?? 0) > 100) titleMap[title].clicks++
+    }
+
+    return Object.entries(titleMap)
+      .map(([title, v]) => ({
+        title,
+        delivered: v.delivered,
+        opens: v.opens,
+        openRate: pct(v.opens, v.delivered),
+        clicks: v.clicks,
+        clickRate: pct(v.clicks, v.delivered),
+        unsubs: 0,
+        bounces: 0,
+      }))
+      .sort((a, b) => b.delivered - a.delivered)
+      .slice(0, 15)
   } catch { return [] }
 }
 
@@ -134,7 +149,7 @@ export default async function SequencesPage() {
     <div className="flex flex-col min-h-full">
       <Header
         title="Sequence Performance"
-        subtitle={isLive ? 'Live Pardot Data — tkxel | Nurture campaign' : 'Email engagement, deliverability, and funnel conversion by sequence'}
+        subtitle={isLive ? 'Live Pardot Data' : 'Email engagement, deliverability, and funnel conversion by sequence'}
         userName={session?.user?.name}
         userRole={session?.user?.role!}
       />

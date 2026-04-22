@@ -3,17 +3,10 @@ import Header from '@/components/layout/Header'
 import { formatPercent, formatCurrency, formatNumber } from '@/lib/utils'
 import { getPardotCreds, getSfCreds, pardotGet, sfQuery } from '@/lib/sf-api'
 
-const NURTURE_SEGMENT_KEYWORDS = [
-  'CIOs and Tech Leaders of Non-Tech',
-  'CEOs and Non-Tech Leaders of Non-Tech',
-  'Managing Partners in Private Equity',
-  'CTOs and Technology Leaders of Tech',
-  'CTOs and Tech Leaders of Funded Tech',
-  'CIOs and Tech Leaders of Non-Tech Businesses With Under',
-  'CEOs and Non-Tech Leaders of Tech Businesses',
-]
-
-interface PardotList { id?: number; name?: string; title?: string; description?: string }
+interface PardotList {
+  id?: number; name?: string; title?: string
+  isDynamic?: boolean; memberCount?: number; totalMembers?: number; description?: string
+}
 interface IndustryRecord { Normalized_Industry__c: string; expr0: number }
 
 type SegmentRow = {
@@ -35,36 +28,31 @@ async function fetchSegmentData() {
       unsubRate: 0, mqlRate: 0, sqlRate: 0, wonRevenue: 0,
     })
 
-    // Pardot lists — match 7 nurture segments
+    // Only dynamic Pardot lists whose name starts with "Nurture"
     const listData = pardotCreds
-      ? await pardotGet<{ values?: PardotList[] }>(pardotCreds, 'lists?fields=id,name,title,description&limit=200')
+      ? await pardotGet<{ values?: PardotList[] }>(
+          pardotCreds,
+          'lists?fields=id,name,title,isDynamic,memberCount,totalMembers,description&limit=200'
+        )
       : null
 
-    const allLists = listData?.values ?? []
-    const nurtureLists = allLists.filter(l => {
-      const n = l.name ?? l.title ?? ''
-      return NURTURE_SEGMENT_KEYWORDS.some(kw => n.includes(kw.substring(0, 20)))
-    })
+    const nurtureLists = (listData?.values ?? []).filter(
+      l => l.isDynamic === true && (l.name ?? l.title ?? '').startsWith('Nurture')
+    )
 
-    // Member counts via list-memberships
-    const memberCounts = pardotCreds && nurtureLists.length
-      ? await Promise.all(
-          nurtureLists.map(async l => {
-            const d = await pardotGet<{ values?: unknown[] }>(pardotCreds, `list-memberships?fields=id&listId=${l.id}&limit=1000`)
-            return { listId: l.id, count: (d?.values ?? []).length }
-          })
-        )
-      : []
-
-    const countMap = Object.fromEntries(memberCounts.map(m => [m.listId, m.count]))
-
-    const segments: SegmentRow[] = nurtureLists.length
-      ? nurtureLists.map(l => makeRow(l.name ?? l.title ?? `List ${l.id}`, countMap[l.id ?? 0] ?? 0)).sort((a, b) => b.delivered - a.delivered)
-      : allLists.slice(0, 10).map(l => makeRow(l.name ?? l.title ?? `List ${l.id}`, 0))
+    const segments: SegmentRow[] = nurtureLists
+      .map(l => makeRow(
+        l.name ?? l.title ?? `List ${l.id}`,
+        l.memberCount ?? l.totalMembers ?? 0
+      ))
+      .sort((a, b) => b.delivered - a.delivered)
 
     // SF industry breakdown from nurture leads
     const industryResult = sfCreds
-      ? await sfQuery<IndustryRecord>(sfCreds, 'SELECT Normalized_Industry__c, COUNT(Id) FROM Lead WHERE Marketing_nurture__c = true AND Normalized_Industry__c != null GROUP BY Normalized_Industry__c ORDER BY COUNT(Id) DESC LIMIT 20')
+      ? await sfQuery<IndustryRecord>(
+          sfCreds,
+          'SELECT Normalized_Industry__c, COUNT(Id) FROM Lead WHERE Marketing_nurture__c = true AND Normalized_Industry__c != null GROUP BY Normalized_Industry__c ORDER BY COUNT(Id) DESC LIMIT 20'
+        )
       : null
 
     const industries: SegmentRow[] = (industryResult?.records ?? []).map(r =>

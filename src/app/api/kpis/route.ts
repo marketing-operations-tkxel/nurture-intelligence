@@ -5,10 +5,7 @@ interface OppRecord { Amount: number; StageName: string }
 interface AggRecord { expr0: number }
 interface ListEmail { id?: number; name?: string; sentAt?: string; isSent?: boolean }
 interface ListEmailsResponse { values?: ListEmail[] }
-interface PardotProspectList {
-  values?: Array<{ score?: number; lastActivityAt?: string; emailBounced?: boolean; isDoNotEmail?: boolean }>
-  nextPageToken?: string
-}
+interface PardotList { id?: number; name?: string; isDynamic?: boolean; memberCount?: number; totalMembers?: number }
 
 export async function GET() {
   const [sfCreds, pardotCreds] = await Promise.all([getSfCreds(), getPardotCreds()])
@@ -21,7 +18,7 @@ export async function GET() {
       sfCreds ? sfCount(sfCreds, 'SELECT COUNT() FROM Lead WHERE Marketing_nurture__c = true AND Non_MQL_Date__c != null AND SQL__c = true AND Not_Accepted__c = false') : Promise.resolve(0),
       sfCreds ? sfCount(sfCreds, 'SELECT COUNT() FROM Lead WHERE Marketing_nurture__c = true AND Discovery_Call__c = true') : Promise.resolve(0),
       sfCreds ? sfQuery<OppRecord>(sfCreds, 'SELECT StageName, Amount FROM Opportunity WHERE IsClosed = false AND Amount != null') : Promise.resolve(null),
-      sfCreds ? sfQuery<AggRecord>(sfCreds, 'SELECT SUM(Amount) FROM Opportunity WHERE IsWon = true AND IsClosed = true AND CloseDate = LAST_N_DAYS:365') : Promise.resolve(null),
+      sfCreds ? sfQuery<AggRecord>(sfCreds, 'SELECT SUM(Amount) FROM Opportunity WHERE IsWon = true AND IsClosed = true') : Promise.resolve(null),
       sfCreds ? sfQuery<AggRecord>(sfCreds, 'SELECT SUM(Amount) FROM Opportunity WHERE IsClosed = false') : Promise.resolve(null),
       sfCreds ? sfCount(sfCreds, 'SELECT COUNT() FROM Opportunity WHERE CreatedDate = THIS_MONTH') : Promise.resolve(0),
     ])
@@ -64,23 +61,20 @@ export async function GET() {
 
   const totalBounces = totalHardBounces + totalSoftBounces
 
-  // ── Pardot prospects ────────────────────────────────────────────────────────
-  const prospects = pardotCreds
-    ? await pardotGet<PardotProspectList>(
-        pardotCreds,
-        'prospects?fields=id,score,lastActivityAt,emailBounced,isDoNotEmail&limit=500'
-      )
-    : null
+  // ── Pardot audience — sum nurture dynamic list member counts ───────────────
+  let totalProspects = 0
+  if (pardotCreds) {
+    const listData = await pardotGet<{ values?: PardotList[] }>(
+      pardotCreds,
+      'lists?fields=id,name,isDynamic,memberCount,totalMembers&limit=200'
+    )
+    totalProspects = (listData?.values ?? [])
+      .filter(l => l.isDynamic === true && (l.name ?? '').startsWith('Nurture'))
+      .reduce((sum, l) => sum + (l.memberCount ?? l.totalMembers ?? 0), 0)
+  }
 
-  const prospectList = prospects?.values ?? []
-  const totalProspects = prospectList.length
-  const now = Date.now()
-  const thirtyDays = 30 * 24 * 60 * 60 * 1000
-  const prospectsOpenedAny = prospectList.filter(p => {
-    if (!p.lastActivityAt) return false
-    return (now - new Date(p.lastActivityAt).getTime()) < thirtyDays
-  }).length
-  const prospectsNoEngagement = totalProspects - prospectsOpenedAny
+  const prospectsOpenedAny = totalUniqueOpens
+  const prospectsNoEngagement = Math.max(0, totalProspects - prospectsOpenedAny)
 
   return NextResponse.json({
     // period
@@ -120,7 +114,7 @@ export async function GET() {
     engagedAudience: prospectsOpenedAny,
     engagedRate: pct(prospectsOpenedAny, totalProspects),
     prospectsOpenedAny,
-    prospectsClickedAny: Math.round(prospectsOpenedAny * pct(totalUniqueClicks, totalUniqueOpens) / 100),
+    prospectsClickedAny: totalUniqueClicks,
     prospectsNoEngagement,
 
     // Connected status

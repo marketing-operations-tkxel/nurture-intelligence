@@ -2,7 +2,7 @@ import { auth } from '@/lib/auth'
 import Header from '@/components/layout/Header'
 import { formatNumber } from '@/lib/utils'
 
-const BASE_URL = process.env.NEXTAUTH_URL || 'https://nurture-intelligence.vercel.app'
+const BASE_URL = 'https://nurture-intelligence.vercel.app'
 
 type BucketData = Record<string, number>
 interface ProspectRow {
@@ -18,7 +18,7 @@ interface ContactsApiData {
 
 async function fetchContacts(): Promise<ContactsApiData> {
   try {
-    const res = await fetch(`${BASE_URL}/api/contacts`, { cache: 'no-store' })
+    const res = await fetch(`${BASE_URL}/api/contacts`, { next: { revalidate: 300 }, headers: { 'x-internal': 'true' } })
     if (!res.ok) return { buckets: null, prospects: [], total: 0, connected: false }
     return await res.json()
   } catch {

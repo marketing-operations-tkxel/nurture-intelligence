@@ -2,7 +2,7 @@ import { auth } from '@/lib/auth'
 import Header from '@/components/layout/Header'
 import { formatNumber, formatPercent, formatCurrency, cn } from '@/lib/utils'
 
-const BASE_URL = process.env.NEXTAUTH_URL || 'https://nurture-intelligence.vercel.app'
+const BASE_URL = 'https://nurture-intelligence.vercel.app'
 
 interface SequenceRow {
   id?: number; name: string; segment: string; status: string
@@ -27,7 +27,7 @@ interface SequencesApiData {
 
 async function fetchSequences(): Promise<SequencesApiData> {
   try {
-    const res = await fetch(`${BASE_URL}/api/sequences`, { cache: 'no-store' })
+    const res = await fetch(`${BASE_URL}/api/sequences`, { next: { revalidate: 300 }, headers: { 'x-internal': 'true' } })
     if (!res.ok) return { sequences: [], subjectLines: [], prospectTitles: [], connected: false }
     return await res.json()
   } catch {

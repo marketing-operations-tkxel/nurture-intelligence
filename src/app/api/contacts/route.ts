@@ -47,7 +47,7 @@ function bucket(p: Prospect): string {
   const last = p.lastActivityAt ? new Date(p.lastActivityAt).getTime() : null
   const daysSince = last != null ? (now - last) / (1000 * 60 * 60 * 24) : Infinity
 
-  if (score >= 100 || daysSince <= 7) return 'hot'
+  if (score >= 75 || daysSince <= 7) return 'hot'
   if (score >= 50 || daysSince <= 30) return 'warm'
   if (score >= 10 || daysSince <= 90) return 'cold'
   return 'inactive'
@@ -71,7 +71,7 @@ export async function GET() {
   const [data, sfCreds] = await Promise.all([
     pardotGet<PardotProspectList>(
       pardotCreds,
-      'prospects?fields=id,email,firstName,lastName,jobTitle,score,grade,lastActivityAt&limit=500'
+      'prospects?fields=id,email,firstName,lastName,jobTitle,score,grade,lastActivityAt&limit=500&sortBy=score&sortOrder=descending'
     ),
     getSfCreds(),
   ])

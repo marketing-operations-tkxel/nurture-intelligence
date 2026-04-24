@@ -156,7 +156,7 @@ check "Sequences" "$SEQUENCES" "prospectTitles.length"  ">0"
 
 check "Segments"  "$SEGMENTS"  "pardotConnected"        "true"
 check "Segments"  "$SEGMENTS"  "segments.length"        "7"
-check "Segments"  "$SEGMENTS"  "newsletter.members"     ">0"
+check "Segments"  "$SEGMENTS"  "segments.0.members"     ">0"
 check "Segments"  "$SEGMENTS"  "industries.length"      ">0"
 
 # ── Summary ───────────────────────────────────────────────────────────────────

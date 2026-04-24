@@ -9,6 +9,12 @@ export function middleware(req: NextRequest) {
 
   if (isApiAuth || isStatic) return NextResponse.next()
 
+  // Internal verification bypass — requires VERIFY_SECRET env var to be set
+  const verifySecret = req.headers.get('x-verify-secret')
+  if (verifySecret && process.env.VERIFY_SECRET && verifySecret === process.env.VERIFY_SECRET) {
+    return NextResponse.next()
+  }
+
   // NextAuth v5 stores session token in this cookie
   const sessionToken =
     req.cookies.get('authjs.session-token')?.value ||

@@ -13,9 +13,9 @@ export async function GET() {
   const [nurtureCount, mqlCount, sqlCount, discoveryCount, oppResult, wonAgg, pipelineAgg, newOpps] =
     await Promise.all([
       sfCreds ? sfCount(sfCreds, 'SELECT COUNT() FROM Lead WHERE Marketing_nurture__c = true') : Promise.resolve(0),
-      sfCreds ? sfCount(sfCreds, 'SELECT COUNT() FROM Lead WHERE Marketing_nurture__c = true AND Non_MQL_Date__c != null') : Promise.resolve(0),
-      sfCreds ? sfCount(sfCreds, 'SELECT COUNT() FROM Lead WHERE Marketing_nurture__c = true AND Non_MQL_Date__c != null AND SQL__c = true AND Not_Accepted__c = false') : Promise.resolve(0),
-      sfCreds ? sfCount(sfCreds, 'SELECT COUNT() FROM Lead WHERE Marketing_nurture__c = true AND Discovery_Call__c = true') : Promise.resolve(0),
+      sfCreds ? sfCount(sfCreds, 'SELECT COUNT() FROM Lead WHERE MQL_Response__c = true') : Promise.resolve(0),
+      sfCreds ? sfCount(sfCreds, 'SELECT COUNT() FROM Lead WHERE SQL__c = true') : Promise.resolve(0),
+      sfCreds ? sfCount(sfCreds, 'SELECT COUNT() FROM Lead WHERE Discovery_Call__c = true') : Promise.resolve(0),
       sfCreds ? sfQuery<OppRecord>(sfCreds, 'SELECT StageName, Amount FROM Opportunity WHERE IsClosed = false AND Amount != null') : Promise.resolve(null),
       sfCreds ? sfQuery<AggRecord>(sfCreds, 'SELECT SUM(Amount) FROM Opportunity WHERE IsWon = true AND IsClosed = true') : Promise.resolve(null),
       sfCreds ? sfQuery<AggRecord>(sfCreds, 'SELECT SUM(Amount) FROM Opportunity WHERE IsClosed = false') : Promise.resolve(null),

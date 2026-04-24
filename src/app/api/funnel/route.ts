@@ -8,14 +8,15 @@ interface PardotProspectList {
 export async function GET() {
   const [sfCreds, pardotCreds] = await Promise.all([getSfCreds(), getPardotCreds()])
 
-  const [totalLeads, mqls, sqls, discoveryCalls, opps, wonOpps] = await Promise.all([
-    sfCreds ? sfCount(sfCreds, 'SELECT COUNT() FROM Lead') : Promise.resolve(0),
-    sfCreds ? sfCount(sfCreds, 'SELECT COUNT() FROM Lead WHERE Non_MQL_Date__c != null') : Promise.resolve(0),
-    sfCreds ? sfCount(sfCreds, 'SELECT COUNT() FROM Lead WHERE Not_Accepted__c = false') : Promise.resolve(0),
-    sfCreds ? sfCount(sfCreds, "SELECT COUNT() FROM Task WHERE CallType != null AND Status = 'Completed'") : Promise.resolve(0),
+  const [nurtureTotal, mqls, sqls, discoveryCalls, opps, wonOpps] = await Promise.all([
+    sfCreds ? sfCount(sfCreds, 'SELECT COUNT() FROM Lead WHERE OQL__c = true') : Promise.resolve(0),
+    sfCreds ? sfCount(sfCreds, 'SELECT COUNT() FROM Lead WHERE MQL_Response__c = true') : Promise.resolve(0),
+    sfCreds ? sfCount(sfCreds, 'SELECT COUNT() FROM Lead WHERE SQL__c = true') : Promise.resolve(0),
+    sfCreds ? sfCount(sfCreds, 'SELECT COUNT() FROM Lead WHERE Discovery_Call__c = true') : Promise.resolve(0),
     sfCreds ? sfCount(sfCreds, 'SELECT COUNT() FROM Opportunity WHERE IsClosed = false') : Promise.resolve(0),
     sfCreds ? sfCount(sfCreds, "SELECT COUNT() FROM Opportunity WHERE StageName = 'Closed Won'") : Promise.resolve(0),
   ])
+  const totalLeads = nurtureTotal
 
   // Engaged = prospects active in last 30 days (from Pardot)
   const prospects = pardotCreds
@@ -53,6 +54,12 @@ export async function GET() {
 
   return NextResponse.json({
     stages,
+    nurtureTotal,
+    mqls,
+    sqls,
+    discoveryCalls,
+    opps,
+    wonOpps,
     sfConnected: !!sfCreds,
     pardotConnected: !!pardotCreds,
   })

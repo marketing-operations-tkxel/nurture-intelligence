@@ -4,6 +4,26 @@ import { prisma } from '@/lib/prisma'
 
 const NURTURE_LIST_IDS = new Set([338651, 338939, 412789, 412798, 412807, 412810, 509437])
 
+const SEGMENT_CODE_MAP: Record<string, string> = {
+  CIO_NT_MM: 'CIOs Non-Tech Mid-Market',
+  CIO_NT_U50: 'CIOs Non-Tech Under $50M',
+  CEO_T_U50: 'CEOs Tech Under $50M',
+  CTO_T_U50: 'CTOs Tech Under $50M',
+  CEO_NT: 'CEOs Non-Tech',
+  CTO_FTS: 'CTOs Funded Tech Startups',
+  PE_MP: 'Private Equity Managing Partners',
+}
+
+// Check longer/more-specific codes first to avoid substring false-matches
+const SEGMENT_CODE_ORDER = ['CIO_NT_MM', 'CIO_NT_U50', 'CEO_T_U50', 'CTO_T_U50', 'CEO_NT', 'CTO_FTS', 'PE_MP']
+
+function parseSegmentLabel(name: string): string {
+  for (const code of SEGMENT_CODE_ORDER) {
+    if (name.includes(code)) return SEGMENT_CODE_MAP[code]
+  }
+  return ''
+}
+
 interface ListEmail {
   id?: number
   name?: string
@@ -65,7 +85,11 @@ export async function GET(req: NextRequest) {
   ])
 
   const allSentEmails = (listEmailsData?.values ?? [])
-    .filter(e => e.isSent === true && e.id != null)
+    .filter(e => {
+      if (e.isSent !== true || e.id == null) return false
+      const n = (e.name ?? '').toLowerCase()
+      return !n.includes('copy') && !n.includes('test') && !n.includes('testing')
+    })
     .sort((a, b) => (b.sentAt ?? '').localeCompare(a.sentAt ?? ''))
     .slice(0, 50)
 
@@ -100,6 +124,7 @@ export async function GET(req: NextRequest) {
       const s = statsResults[i]
       if (!s) return null
       const sent = s.sent ?? 0
+      if (sent < 10) return null
       const delivered = s.delivered ?? 0
       const opens = s.uniqueOpens ?? 0
       const clicks = s.uniqueClicks ?? 0
@@ -115,6 +140,7 @@ export async function GET(req: NextRequest) {
       return {
         id: e.id,
         name: e.subject ?? e.name ?? `Email ${e.id}`,
+        segmentLabel: parseSegmentLabel(e.name ?? ''),
         segment: 'All Prospects',
         status: 'active',
         sent, delivered, opens, clicks, bounces, unsubs, spam,

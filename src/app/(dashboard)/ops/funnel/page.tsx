@@ -11,14 +11,15 @@ async function fetchFunnelData() {
   try {
     const [sfCreds, pardotCreds] = await Promise.all([getSfCreds(), getPardotCreds()])
     if (!sfCreds) return null
-    const [totalLeads, mqls, sqls, discoveryCalls, opps, wonOpps] = await Promise.all([
-      sfCount(sfCreds, 'SELECT COUNT() FROM Lead'),
-      sfCount(sfCreds, 'SELECT COUNT() FROM Lead WHERE Non_MQL_Date__c != null'),
-      sfCount(sfCreds, 'SELECT COUNT() FROM Lead WHERE Not_Accepted__c = false'),
-      sfCount(sfCreds, "SELECT COUNT() FROM Task WHERE CallType != null AND Status = 'Completed'"),
+    const [nurtureTotal, mqls, sqls, discoveryCalls, opps, wonOpps] = await Promise.all([
+      sfCount(sfCreds, 'SELECT COUNT() FROM Lead WHERE OQL__c = true'),
+      sfCount(sfCreds, 'SELECT COUNT() FROM Lead WHERE MQL_Response__c = true'),
+      sfCount(sfCreds, 'SELECT COUNT() FROM Lead WHERE SQL__c = true'),
+      sfCount(sfCreds, 'SELECT COUNT() FROM Lead WHERE Discovery_Call__c = true'),
       sfCount(sfCreds, 'SELECT COUNT() FROM Opportunity WHERE IsClosed = false'),
       sfCount(sfCreds, "SELECT COUNT() FROM Opportunity WHERE StageName = 'Closed Won'"),
     ])
+    const totalLeads = nurtureTotal
     type P = { lastActivityAt?: string }
     const prospects = pardotCreds
       ? await pardotGet<{ values?: P[] }>(pardotCreds, 'prospects?fields=id,lastActivityAt&limit=500')
@@ -39,7 +40,7 @@ async function fetchFunnelData() {
     ]
     return {
       stages: raw.map(s => ({ ...s, rate: parseFloat(((s.count / base) * 100).toFixed(1)) })),
-      totalLeads, mqls, sqls, discoveryCalls, opps, wonOpps,
+      nurtureTotal, mqls, sqls, discoveryCalls, opps, wonOpps,
     }
   } catch { return null }
 }
@@ -50,7 +51,7 @@ export default async function FunnelPage() {
   const funnelData = live?.stages ?? []
   const isLive = !!live
 
-  const totalLeads = live?.totalLeads ?? 0
+  const nurtureTotal = live?.nurtureTotal ?? 0
   const mqls = live?.mqls ?? 0
   const sqls = live?.sqls ?? 0
   const discoveryCalls = live?.discoveryCalls ?? 0
@@ -83,10 +84,10 @@ export default async function FunnelPage() {
 
         {/* Conversion rates */}
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-          <KpiCard label="MQL Rate" value={formatPercent(totalLeads ? mqls / totalLeads * 100 : 0)} sub="of contacts added to nurture" />
+          <KpiCard label="MQL Rate" value={formatPercent(nurtureTotal ? mqls / nurtureTotal * 100 : 0)} sub="of nurture leads (OQL)" />
           <KpiCard label="SQL Rate" value={formatPercent(mqls ? sqls / mqls * 100 : 0)} sub="of MQLs" />
           <KpiCard label="Discovery Call Rate" value={formatPercent(sqls ? discoveryCalls / sqls * 100 : 0)} sub="of SQLs" />
-          <KpiCard label="Win Rate" value={formatPercent(opps ? wonOpps / opps * 100 : 0)} sub="of opportunities" accent />
+          <KpiCard label="Win Rate" value={formatPercent(discoveryCalls ? wonOpps / discoveryCalls * 100 : 0)} sub="of discovery calls" accent />
         </div>
 
         {/* Avg times */}

@@ -1,11 +1,29 @@
 import { auth } from '@/lib/auth'
 import Header from '@/components/layout/Header'
 import { formatNumber } from '@/lib/utils'
-import { getPardotCreds, pardotGet } from '@/lib/sf-api'
+import { getPardotCreds, getSfCreds, pardotGet, sfQuery } from '@/lib/sf-api'
 import { prisma } from '@/lib/prisma'
+import ContactProspectTable from '@/components/tables/ContactProspectTable'
 
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
+
+interface Prospect {
+  id?: number
+  email?: string
+  firstName?: string
+  lastName?: string
+  jobTitle?: string
+  score?: number
+  grade?: string
+  lastActivityAt?: string
+}
+
+interface SfLead {
+  Email?: string
+  Pardot_Segments__c?: string
+  Pardot_Nurture_Step__c?: string
+}
 
 async function getContactsData() {
   try {
@@ -23,10 +41,24 @@ async function getContactsData() {
       creds = { accessToken: ss.accessToken, businessUnitId: ps.businessUnitId }
     }
 
-    const data = await pardotGet<{ values?: Array<{
-      id?: number; email?: string; firstName?: string; lastName?: string
-      jobTitle?: string; score?: number; grade?: string; lastActivityAt?: string
-    }> }>(creds, 'prospects?fields=id,email,firstName,lastName,jobTitle,score,grade,lastActivityAt&limit=500')
+    const [data, sfCreds] = await Promise.all([
+      pardotGet<{ values?: Prospect[] }>(creds, 'prospects?fields=id,email,firstName,lastName,jobTitle,score,grade,lastActivityAt&limit=500'),
+      getSfCreds(),
+    ])
+
+    const sfLeadsResult = sfCreds
+      ? await sfQuery<SfLead>(sfCreds, 'SELECT Email, Pardot_Segments__c, Pardot_Nurture_Step__c FROM Lead WHERE OQL__c = true LIMIT 1000')
+      : null
+
+    const segmentMap = new Map<string, { segment: string; nurtureStep: string }>()
+    for (const lead of sfLeadsResult?.records ?? []) {
+      if (lead.Email) {
+        segmentMap.set(lead.Email.toLowerCase(), {
+          segment: lead.Pardot_Segments__c ?? '—',
+          nurtureStep: lead.Pardot_Nurture_Step__c ?? '—',
+        })
+      }
+    }
 
     const list = data?.values ?? []
     const now = Date.now()
@@ -47,15 +79,20 @@ async function getContactsData() {
     const prospects = [...list]
       .sort((a, b) => (b.score ?? 0) - (a.score ?? 0))
       .slice(0, 50)
-      .map((p, i) => ({
-        id: i + 1,
-        name: [p.firstName, p.lastName].filter(Boolean).join(' ') || p.email || `Prospect ${p.id}`,
-        title: p.jobTitle ?? '—',
-        score: p.score ?? 0,
-        grade: p.grade ?? '—',
-        status: (p.score ?? 0) >= 150 ? 'Engaged' : (p.score ?? 0) >= 75 ? 'Warm' : (p.score ?? 0) >= 25 ? 'Low Click' : 'Dark',
-        lastActivity: p.lastActivityAt ?? null,
-      }))
+      .map((p, i) => {
+        const sfInfo = segmentMap.get((p.email ?? '').toLowerCase())
+        return {
+          id: i + 1,
+          name: [p.firstName, p.lastName].filter(Boolean).join(' ') || p.email || `Prospect ${p.id}`,
+          title: p.jobTitle ?? '—',
+          score: p.score ?? 0,
+          grade: p.grade ?? '—',
+          status: (p.score ?? 0) >= 150 ? 'Engaged' : (p.score ?? 0) >= 75 ? 'Warm' : (p.score ?? 0) >= 25 ? 'Low Click' : 'Dark',
+          lastActivity: p.lastActivityAt ?? null,
+          segment: sfInfo?.segment ?? '—',
+          nurtureStep: sfInfo?.nurtureStep ?? '—',
+        }
+      })
 
     return { buckets, prospects, total: 6421, connected: true }
   } catch (e) {
@@ -171,60 +208,9 @@ export default async function ContactsPage() {
         {/* Prospect Activity */}
         <div>
           <p className="text-white/30 text-xs font-mono uppercase tracking-widest mb-3">Prospect Activity</p>
-          <div className="rounded-xl border border-white/5 overflow-hidden">
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="bg-graphite-800 border-b border-white/5">
-                    {['#', 'Name', 'Title', 'Score', 'Grade', 'Status', 'Last Activity'].map((h) => (
-                      <th key={h} className="text-left px-4 py-3 text-white/40 text-xs font-mono uppercase tracking-widest whitespace-nowrap">
-                        {h}
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {prospectRows.length === 0 && (
-                    <tr><td colSpan={7} className="px-4 py-8 text-center text-white/30 text-sm">No data — connect Pardot to see prospect activity</td></tr>
-                  )}
-                  {prospectRows.map((p) => (
-                    <tr key={p.id} className="bg-graphite-800 border-t border-white/5 hover:bg-white/5 transition-colors">
-                      <td className="px-4 py-3 text-white/40 font-mono text-xs">{p.id}</td>
-                      <td className="px-4 py-3 text-white/80 font-medium whitespace-nowrap">{p.name}</td>
-                      <td className="px-4 py-3 text-white/50 whitespace-nowrap">{p.title}</td>
-                      <td className="px-4 py-3 text-white/70 font-mono">{p.score}</td>
-                      <td className="px-4 py-3 text-white/70 font-mono">{p.grade}</td>
-                      <td className="px-4 py-3">
-                        <ProspectStatusBadge status={p.status} />
-                      </td>
-                      <td className="px-4 py-3 text-white/40 font-mono text-xs whitespace-nowrap">
-                        {p.lastActivity ? new Date(p.lastActivity).toLocaleDateString() : '—'}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
+          <ContactProspectTable rows={prospectRows} />
         </div>
       </div>
     </div>
-  )
-}
-
-function ProspectStatusBadge({ status }: { status: string }) {
-  const styles: Record<string, { background: string; color: string }> = {
-    Engaged: { background: '#0f2a18', color: '#4ade80' },
-    'Low Open': { background: '#0f1e38', color: '#38bdf8' },
-    'Low Click': { background: '#0f1e38', color: '#38bdf8' },
-    Dark: { background: '#2a1a0a', color: '#fb923c' },
-    Bounced: { background: '#2a0f0f', color: '#f87171' },
-    Unsub: { background: '#2a0f0f', color: '#f87171' },
-  }
-  const s = styles[status] ?? { background: '#1a1a2a', color: '#c084fc' }
-  return (
-    <span className="text-xs font-mono px-2 py-0.5 rounded-full whitespace-nowrap" style={s}>
-      {status}
-    </span>
   )
 }

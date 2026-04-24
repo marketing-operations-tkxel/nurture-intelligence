@@ -13,7 +13,23 @@ const SEGMENT_LISTS = [
 
 const NEWSLETTER_LIST = { id: 619875, name: 'Nurture & Future Interest' }
 
-const ALL_LIST_IDS = new Set([...SEGMENT_LISTS.map(l => l.id), NEWSLETTER_LIST.id])
+// Ordered from most-specific to least-specific to prevent substring false-matches
+const EMAIL_NAME_PATTERNS: Array<[string, number]> = [
+  ['CIO_NT_MM', 338651],
+  ['CIO_NT_U50', 509437],
+  ['CEO_T_U50', 412789],
+  ['CTO_T_U50', 412798],
+  ['CEO_NT', 338939],
+  ['CTO_FTS', 412807],
+  ['PE_MP', 412810],
+]
+
+function emailNameToListId(name: string): number | null {
+  for (const [pattern, id] of EMAIL_NAME_PATTERNS) {
+    if (name.includes(pattern)) return id
+  }
+  return null
+}
 
 interface ListEmail {
   id?: number
@@ -21,11 +37,6 @@ interface ListEmail {
   subject?: string
   sentAt?: string
   isSent?: boolean
-}
-
-interface ListEmailDetail {
-  id?: number
-  recipientLists?: Array<{ id?: number }> | { values?: Array<{ id?: number }> }
 }
 
 interface IndustryRecord { Normalized_Industry__c: string; expr0: number }
@@ -59,33 +70,27 @@ export async function GET(_req: NextRequest) {
     })
   }
 
-  // Fetch all sent list-emails (up to 50 most recent)
+  // Fetch all sent list-emails (no individual detail fetches — match by name pattern)
   const listEmailsData = await pardotGet<{ values?: ListEmail[] }>(
     pardotCreds,
     'list-emails?fields=id,name,subject,sentAt,isSent&limit=200'
   )
   const allSent = (listEmailsData?.values ?? [])
-    .filter(e => e.isSent === true && e.id != null)
+    .filter(e => {
+      if (e.isSent !== true || e.id == null) return false
+      const n = (e.name ?? '').toLowerCase()
+      return !n.includes('copy') && !n.includes('test') && !n.includes('testing')
+    })
     .sort((a, b) => (b.sentAt ?? '').localeCompare(a.sentAt ?? ''))
-    .slice(0, 50)
+    .slice(0, 100)
 
-  // Fetch detail for each email to get recipientLists
-  const details = await Promise.all(
-    allSent.map(e => pardotGet<ListEmailDetail>(pardotCreds, `list-emails/${e.id}?fields=id,recipientLists.id`))
-  )
-
-  // Build map: listId -> list of email indices sent to that list
+  // Group email indices by segment list ID using name pattern matching
   const listEmailIndices = new Map<number, number[]>()
-  for (const [i, detail] of details.entries()) {
-    if (!detail) continue
-    const lists: Array<{ id?: number }> = Array.isArray(detail.recipientLists)
-      ? detail.recipientLists
-      : (detail.recipientLists as { values?: Array<{ id?: number }> })?.values ?? []
-    for (const l of lists) {
-      if (l.id != null && ALL_LIST_IDS.has(l.id)) {
-        if (!listEmailIndices.has(l.id)) listEmailIndices.set(l.id, [])
-        listEmailIndices.get(l.id)!.push(i)
-      }
+  for (const [i, email] of allSent.entries()) {
+    const listId = emailNameToListId(email.name ?? '')
+    if (listId != null) {
+      if (!listEmailIndices.has(listId)) listEmailIndices.set(listId, [])
+      listEmailIndices.get(listId)!.push(i)
     }
   }
 
@@ -97,13 +102,14 @@ export async function GET(_req: NextRequest) {
     statsMap.set(idx, statsResults[j])
   }
 
-  // Aggregate stats per list
   function aggregateStats(emailIndices: number[], name: string, members: number): StatsRow {
     let sent = 0, delivered = 0, opens = 0, clicks = 0, bounces = 0, unsubs = 0
     for (const idx of emailIndices) {
       const s = statsMap.get(idx)
       if (!s) continue
-      sent += s.sent ?? 0
+      const emailSent = s.sent ?? 0
+      if (emailSent < 10) continue
+      sent += emailSent
       delivered += s.delivered ?? 0
       opens += s.uniqueOpens ?? 0
       clicks += s.uniqueClicks ?? 0
@@ -121,7 +127,6 @@ export async function GET(_req: NextRequest) {
     }
   }
 
-  // Count members and aggregate stats in parallel
   const [memberCounts, industryResult] = await Promise.all([
     Promise.all([...SEGMENT_LISTS.map(l => l.id), NEWSLETTER_LIST.id].map(id => countListMembers(pardotCreds, id))),
     sfCreds
@@ -129,15 +134,11 @@ export async function GET(_req: NextRequest) {
       : Promise.resolve(null),
   ])
 
-  const segments: StatsRow[] = SEGMENT_LISTS.map((list, i) =>
-    aggregateStats(listEmailIndices.get(list.id) ?? [], list.name, memberCounts[i])
-  ).sort((a, b) => b.members - a.members)
+  const segments: StatsRow[] = SEGMENT_LISTS
+    .map((list, i) => aggregateStats(listEmailIndices.get(list.id) ?? [], list.name, memberCounts[i]))
+    .sort((a, b) => b.members - a.members)
 
-  const newsletter: StatsRow = aggregateStats(
-    listEmailIndices.get(NEWSLETTER_LIST.id) ?? [],
-    NEWSLETTER_LIST.name,
-    memberCounts[SEGMENT_LISTS.length]
-  )
+  const newsletter: StatsRow = emptyRow(NEWSLETTER_LIST.name, memberCounts[SEGMENT_LISTS.length])
 
   const industries: StatsRow[] = (industryResult?.records ?? []).map(r =>
     emptyRow(r.Normalized_Industry__c, r.expr0)

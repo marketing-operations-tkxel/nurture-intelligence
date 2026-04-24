@@ -1,8 +1,14 @@
 import { NextResponse } from 'next/server'
-import { getPardotCreds, pardotGet } from '@/lib/sf-api'
+import { getPardotCreds, getSfCreds, pardotGet, sfQuery } from '@/lib/sf-api'
 import { prisma } from '@/lib/prisma'
 
 const TOTAL_NURTURE_AUDIENCE = 6421
+
+interface SfLead {
+  Email?: string
+  Pardot_Segments__c?: string
+  Pardot_Nurture_Step__c?: string
+}
 
 interface Prospect {
   id?: number
@@ -62,10 +68,27 @@ export async function GET() {
     return NextResponse.json({ buckets: null, prospects: [], connected: false })
   }
 
-  const data = await pardotGet<PardotProspectList>(
-    pardotCreds,
-    'prospects?fields=id,email,firstName,lastName,jobTitle,score,grade,lastActivityAt&limit=500'
-  )
+  const [data, sfCreds] = await Promise.all([
+    pardotGet<PardotProspectList>(
+      pardotCreds,
+      'prospects?fields=id,email,firstName,lastName,jobTitle,score,grade,lastActivityAt&limit=500'
+    ),
+    getSfCreds(),
+  ])
+
+  const sfLeadsResult = sfCreds
+    ? await sfQuery<SfLead>(sfCreds, 'SELECT Email, Pardot_Segments__c, Pardot_Nurture_Step__c FROM Lead WHERE OQL__c = true LIMIT 1000')
+    : null
+
+  const segmentMap = new Map<string, { segment: string; nurtureStep: string }>()
+  for (const lead of sfLeadsResult?.records ?? []) {
+    if (lead.Email) {
+      segmentMap.set(lead.Email.toLowerCase(), {
+        segment: lead.Pardot_Segments__c ?? '—',
+        nurtureStep: lead.Pardot_Nurture_Step__c ?? '—',
+      })
+    }
+  }
 
   const prospects = data?.values ?? []
 
@@ -83,15 +106,20 @@ export async function GET() {
   const prospectDetail = [...prospects]
     .sort((a, b) => (b.score ?? 0) - (a.score ?? 0))
     .slice(0, 50)
-    .map((p, i) => ({
-      id: i + 1,
-      name: [p.firstName, p.lastName].filter(Boolean).join(' ') || p.email || `Prospect ${p.id}`,
-      title: p.jobTitle ?? '—',
-      score: p.score ?? 0,
-      grade: p.grade ?? '—',
-      status: status(p),
-      lastActivity: p.lastActivityAt ?? null,
-    }))
+    .map((p, i) => {
+      const sfInfo = segmentMap.get((p.email ?? '').toLowerCase())
+      return {
+        id: i + 1,
+        name: [p.firstName, p.lastName].filter(Boolean).join(' ') || p.email || `Prospect ${p.id}`,
+        title: p.jobTitle ?? '—',
+        score: p.score ?? 0,
+        grade: p.grade ?? '—',
+        status: status(p),
+        lastActivity: p.lastActivityAt ?? null,
+        segment: sfInfo?.segment ?? '—',
+        nurtureStep: sfInfo?.nurtureStep ?? '—',
+      }
+    })
 
   return NextResponse.json({
     buckets,

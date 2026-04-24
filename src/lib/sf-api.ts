@@ -111,7 +111,10 @@ export async function sfQuery<T = unknown>(
 
 export async function sfCount(creds: SfCreds, soql: string): Promise<number> {
   const result = await sfQuery<{ expr0: number }>(creds, soql)
-  return result?.records?.[0]?.expr0 ?? 0
+  if (!result) return 0
+  // SELECT COUNT() returns totalSize with an empty records array.
+  // SELECT COUNT(Id) returns records[0].expr0. Handle both.
+  return result.records?.[0]?.expr0 ?? result.totalSize ?? 0
 }
 
 // ─── Pardot API v5 ────────────────────────────────────────────────────────────

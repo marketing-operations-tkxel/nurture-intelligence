@@ -34,7 +34,7 @@ function emailNameToListId(name: string): number | null {
 }
 
 interface ListEmail { id?: number; name?: string; sentAt?: string; isSent?: boolean }
-interface IndustryRecord { Normalized_Industry__c: string; expr0: number }
+interface IndustryRecord { Industry: string; expr0: number }
 
 type StatsRow = {
   name: string; members: number
@@ -52,12 +52,12 @@ async function getSegmentsData() {
 
     if (!pardotCreds) {
       const industryResult = sfCreds
-        ? await sfQuery<IndustryRecord>(sfCreds, 'SELECT Normalized_Industry__c, COUNT(Id) FROM Lead WHERE OQL__c = true AND Normalized_Industry__c != null GROUP BY Normalized_Industry__c ORDER BY COUNT(Id) DESC LIMIT 20')
+        ? await sfQuery<IndustryRecord>(sfCreds, 'SELECT Industry, COUNT(Id) FROM Lead WHERE Industry != null GROUP BY Industry ORDER BY COUNT(Id) DESC LIMIT 20')
         : null
       return {
         segments: SEGMENT_LISTS.map(l => emptyRow(l.name, 0)),
         newsletter: emptyRow(NEWSLETTER_LIST.name, 0),
-        industries: (industryResult?.records ?? []).map(r => emptyRow(r.Normalized_Industry__c, r.expr0)),
+        industries: (industryResult?.records ?? []).map(r => emptyRow(r.Industry, r.expr0)),
         sfConnected: !!sfCreds, pardotConnected: false,
       }
     }
@@ -113,7 +113,7 @@ async function getSegmentsData() {
     const [memberCounts, industryResult] = await Promise.all([
       Promise.all([...SEGMENT_LISTS.map(l => l.id), NEWSLETTER_LIST.id].map(id => countListMembers(pardotCreds, id))),
       sfCreds
-        ? sfQuery<IndustryRecord>(sfCreds, 'SELECT Normalized_Industry__c, COUNT(Id) FROM Lead WHERE OQL__c = true AND Normalized_Industry__c != null GROUP BY Normalized_Industry__c ORDER BY COUNT(Id) DESC LIMIT 20')
+        ? sfQuery<IndustryRecord>(sfCreds, 'SELECT Industry, COUNT(Id) FROM Lead WHERE Industry != null GROUP BY Industry ORDER BY COUNT(Id) DESC LIMIT 20')
         : Promise.resolve(null),
     ])
 
@@ -123,7 +123,7 @@ async function getSegmentsData() {
 
     const newsletter: StatsRow = emptyRow(NEWSLETTER_LIST.name, memberCounts[SEGMENT_LISTS.length])
 
-    const industries: StatsRow[] = (industryResult?.records ?? []).map(r => emptyRow(r.Normalized_Industry__c, r.expr0))
+    const industries: StatsRow[] = (industryResult?.records ?? []).map(r => emptyRow(r.Industry, r.expr0))
 
     return { segments, newsletter, industries, sfConnected: !!sfCreds, pardotConnected: true }
   } catch (e) {

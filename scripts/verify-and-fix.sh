@@ -146,7 +146,7 @@ check "Funnel"    "$FUNNEL"    "stages.length"          "7"
 
 check "Contacts"  "$CONTACTS"  "connected"              "true"
 check "Contacts"  "$CONTACTS"  "total"                  "6421"
-check "Contacts"  "$CONTACTS"  "buckets.hot"            ">0"
+check "Contacts"  "$CONTACTS"  "buckets.warm"           ">0"
 check "Contacts"  "$CONTACTS"  "prospects.length"       ">0"
 
 check "Sequences" "$SEQUENCES" "connected"              "true"

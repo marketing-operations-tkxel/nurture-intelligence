@@ -39,7 +39,7 @@ interface ListEmail {
   isSent?: boolean
 }
 
-interface IndustryRecord { Normalized_Industry__c: string; expr0: number }
+interface IndustryRecord { Industry: string; expr0: number }
 
 type StatsRow = {
   name: string
@@ -58,9 +58,9 @@ export async function GET(_req: NextRequest) {
 
   if (!pardotCreds) {
     const industryResult = sfCreds
-      ? await sfQuery<IndustryRecord>(sfCreds, 'SELECT Normalized_Industry__c, COUNT(Id) FROM Lead WHERE OQL__c = true AND Normalized_Industry__c != null GROUP BY Normalized_Industry__c ORDER BY COUNT(Id) DESC LIMIT 20')
+      ? await sfQuery<IndustryRecord>(sfCreds, 'SELECT Industry, COUNT(Id) FROM Lead WHERE Industry != null GROUP BY Industry ORDER BY COUNT(Id) DESC LIMIT 20')
       : null
-    const industries = (industryResult?.records ?? []).map(r => emptyRow(r.Normalized_Industry__c, r.expr0))
+    const industries = (industryResult?.records ?? []).map(r => emptyRow(r.Industry, r.expr0))
     return NextResponse.json({
       segments: SEGMENT_LISTS.map(l => emptyRow(l.name, 0)),
       newsletter: emptyRow(NEWSLETTER_LIST.name, 0),
@@ -130,7 +130,7 @@ export async function GET(_req: NextRequest) {
   const [memberCounts, industryResult] = await Promise.all([
     Promise.all([...SEGMENT_LISTS.map(l => l.id), NEWSLETTER_LIST.id].map(id => countListMembers(pardotCreds, id))),
     sfCreds
-      ? sfQuery<IndustryRecord>(sfCreds, 'SELECT Normalized_Industry__c, COUNT(Id) FROM Lead WHERE OQL__c = true AND Normalized_Industry__c != null GROUP BY Normalized_Industry__c ORDER BY COUNT(Id) DESC LIMIT 20')
+      ? sfQuery<IndustryRecord>(sfCreds, 'SELECT Industry, COUNT(Id) FROM Lead WHERE Industry != null GROUP BY Industry ORDER BY COUNT(Id) DESC LIMIT 20')
       : Promise.resolve(null),
   ])
 
@@ -141,7 +141,7 @@ export async function GET(_req: NextRequest) {
   const newsletter: StatsRow = emptyRow(NEWSLETTER_LIST.name, memberCounts[SEGMENT_LISTS.length])
 
   const industries: StatsRow[] = (industryResult?.records ?? []).map(r =>
-    emptyRow(r.Normalized_Industry__c, r.expr0)
+    emptyRow(r.Industry, r.expr0)
   )
 
   return NextResponse.json({ segments, newsletter, industries, sfConnected: !!sfCreds, pardotConnected: true })

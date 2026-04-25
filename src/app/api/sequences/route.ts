@@ -111,8 +111,8 @@ export async function GET(_req: NextRequest) {
   const allSentEmails = (listEmailsData?.values ?? [])
     .filter(e => {
       if (e.isSent !== true || e.id == null) return false
-      const n = e.name ?? ''
-      return n.startsWith('NS |')
+      const n = (e.name ?? '').toLowerCase()
+      return !n.includes('copy') && !n.includes(' test') && !n.includes('testing')
     })
     .sort((a, b) => (b.sentAt ?? '').localeCompare(a.sentAt ?? ''))
     .slice(0, 50)
@@ -139,7 +139,7 @@ export async function GET(_req: NextRequest) {
 
   const statsResults = await Promise.all(sentEmails.map(e => pardotStats(pardotCreds, e.id!)))
 
-  const sequences = sentEmails
+  const allSequences = sentEmails
     .map((e, i) => {
       const s = statsResults[i]
       if (!s) return null
@@ -174,6 +174,10 @@ export async function GET(_req: NextRequest) {
       }
     })
     .filter((s): s is NonNullable<typeof s> => s !== null)
+
+  // Prefer NS | prefixed nurture sequence emails; fall back to all if none found
+  const nsOnly = allSequences.filter(s => s.name.startsWith('NS |'))
+  const sequences = (nsOnly.length > 0 ? nsOnly : allSequences)
     .sort((a, b) => b.openRate - a.openRate)
 
   const subjectLines = [...sequences]

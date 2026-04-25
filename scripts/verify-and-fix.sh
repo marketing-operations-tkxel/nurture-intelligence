@@ -7,7 +7,7 @@
 # =============================================================================
 
 VERIFY_SECRET="ni-verify-2026"
-DEPLOYMENT="${DEPLOYMENT:-nurture-intelligence-pj67jnhlq.vercel.app}"
+DEPLOYMENT="${DEPLOYMENT:-nurture-intelligence.vercel.app}"
 PASS=0
 FAIL=0
 

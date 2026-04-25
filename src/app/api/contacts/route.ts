@@ -72,7 +72,7 @@ export async function GET() {
   const [data, sfCreds] = await Promise.all([
     pardotGet<PardotProspectList>(
       pardotCreds,
-      'prospects?fields=id,email,firstName,lastName,jobTitle,score,grade,lastActivityAt&limit=500&sortBy=score&sortOrder=descending'
+      'prospects?fields=id,email,firstName,lastName,jobTitle,score,grade,lastActivityAt&limit=500'
     ),
     getSfCreds(),
   ])

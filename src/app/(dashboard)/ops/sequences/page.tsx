@@ -27,11 +27,16 @@ const SEGMENT_NAME_MAP: Record<string, string> = {
   CIO_NT_U50: 'CIOs & Tech Leaders | Non-Tech | Under $50M new',
 }
 
+const SEGMENT_CODE_ORDER = ['CIO_NT_MM', 'CIO_NT_U50', 'CEO_T_U50', 'CTO_T_U50', 'CEO_NT', 'CTO_FTS', 'PE_MP']
+
 function extractSegmentCode(name: string): string | null {
   const parts = name.split(' | ')
   if (parts.length >= 2 && parts[0].trim() === 'NS') {
     const code = parts[1].trim()
     if (SEGMENT_CODE_TO_LIST_ID[code] !== undefined) return code
+  }
+  for (const code of SEGMENT_CODE_ORDER) {
+    if (name.includes(code)) return code
   }
   return null
 }

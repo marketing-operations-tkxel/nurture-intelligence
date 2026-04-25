@@ -5,7 +5,7 @@ import FunnelChart from '@/components/charts/FunnelChart'
 import TrendChart from '@/components/charts/TrendChart'
 import DualTrendChart from '@/components/charts/DualTrendChart'
 import { formatNumber, formatCurrency, formatPercent } from '@/lib/utils'
-import { getSfCreds, getPardotCreds, sfQuery, sfCount, pardotGet, pardotStats, pct } from '@/lib/sf-api'
+import { getSfCreds, getPardotCreds, sfQuery, sfCount, pardotGet, pardotStats, pct, getNurtureAudienceCount } from '@/lib/sf-api'
 
 export const dynamic = 'force-dynamic'
 
@@ -33,10 +33,10 @@ async function fetchKpis() {
     if (!sfCreds && !pardotCreds) return null
 
     const [mqlCount, sqlCount, discoveryCount, wonAgg, pipelineAgg, newOpps] = await Promise.all([
-      sfCreds ? sfCount(sfCreds, 'SELECT COUNT() FROM Lead WHERE Non_MQL_Date__c != null') : 0,
-      sfCreds ? sfCount(sfCreds, 'SELECT COUNT() FROM Lead WHERE Not_Accepted__c = false') : 0,
-      sfCreds ? sfCount(sfCreds, "SELECT COUNT() FROM Task WHERE CallType != null AND Status = 'Completed'") : 0,
-      sfCreds ? sfQuery<{ expr0: number }>(sfCreds, 'SELECT SUM(Amount) FROM Opportunity WHERE IsWon = true AND IsClosed = true') : null,
+      sfCreds ? sfCount(sfCreds, 'SELECT COUNT() FROM Lead WHERE MQL_Response__c = true') : 0,
+      sfCreds ? sfCount(sfCreds, 'SELECT COUNT() FROM Lead WHERE SQL__c = true') : 0,
+      sfCreds ? sfCount(sfCreds, 'SELECT COUNT() FROM Lead WHERE Discovery_Call__c = true') : 0,
+      sfCreds ? sfQuery<{ expr0: number }>(sfCreds, 'SELECT SUM(Amount) FROM Opportunity WHERE IsWon = true AND IsClosed = true AND Amount < 10000000') : null,
       sfCreds ? sfQuery<{ expr0: number }>(sfCreds, 'SELECT SUM(Amount) FROM Opportunity WHERE IsClosed = false') : null,
       sfCreds ? sfCount(sfCreds, 'SELECT COUNT() FROM Opportunity WHERE CreatedDate = THIS_MONTH') : 0,
     ])
@@ -67,24 +67,27 @@ async function fetchKpis() {
     const totalBounces = totalHardBounces + totalSoftBounces
 
     type ProspectRow = { lastActivityAt?: string }
-    const prospects = pardotCreds
-      ? await pardotGet<{ values?: ProspectRow[] }>(pardotCreds, 'prospects?fields=id,lastActivityAt&limit=500')
-      : null
+    const [prospects, totalAudience] = await Promise.all([
+      pardotCreds
+        ? pardotGet<{ values?: ProspectRow[] }>(pardotCreds, 'prospects?fields=id,lastActivityAt&limit=500')
+        : Promise.resolve(null),
+      pardotCreds ? getNurtureAudienceCount(pardotCreds) : Promise.resolve(0),
+    ])
     const prospectList = prospects?.values ?? []
     const now = Date.now()
     const thirtyDays = 30 * 24 * 60 * 60 * 1000
     const prospectsOpenedAny = prospectList.filter(p =>
       p.lastActivityAt && (now - new Date(p.lastActivityAt).getTime()) < thirtyDays
     ).length
-    const prospectsNoEngagement = prospectList.length - prospectsOpenedAny
+    const prospectsNoEngagement = Math.max(0, totalAudience - prospectsOpenedAny)
 
     return {
       wonRevenue, pipelineValue,
       wonOpportunities: 0, opportunitiesCreated: newOpps,
       mqls: mqlCount, sqls: sqlCount, discoveryCalls: discoveryCount,
       engagedAudience: prospectsOpenedAny,
-      engagedRate: pct(prospectsOpenedAny, prospectList.length),
-      totalAudience: prospectList.length,
+      engagedRate: pct(prospectsOpenedAny, totalAudience),
+      totalAudience,
       emailsSent: totalSent,
       deliveryRate: pct(totalDelivered, totalSent),
       uniqueOpenRate: pct(totalUniqueOpens, totalDelivered),
@@ -109,12 +112,12 @@ async function fetchFunnelData() {
     const [sfCreds, pardotCreds] = await Promise.all([getSfCreds(), getPardotCreds()])
     if (!sfCreds) return null
     const [totalLeads, mqls, sqls, discoveryCalls, opps, wonOpps] = await Promise.all([
-      sfCount(sfCreds, 'SELECT COUNT() FROM Lead'),
-      sfCount(sfCreds, 'SELECT COUNT() FROM Lead WHERE Non_MQL_Date__c != null'),
-      sfCount(sfCreds, 'SELECT COUNT() FROM Lead WHERE Not_Accepted__c = false'),
-      sfCount(sfCreds, "SELECT COUNT() FROM Task WHERE CallType != null AND Status = 'Completed'"),
+      sfCount(sfCreds, 'SELECT COUNT() FROM Lead WHERE Marketing_nurture__c = true'),
+      sfCount(sfCreds, 'SELECT COUNT() FROM Lead WHERE MQL_Response__c = true'),
+      sfCount(sfCreds, 'SELECT COUNT() FROM Lead WHERE SQL__c = true'),
+      sfCount(sfCreds, 'SELECT COUNT() FROM Lead WHERE Discovery_Call__c = true'),
       sfCount(sfCreds, 'SELECT COUNT() FROM Opportunity WHERE IsClosed = false'),
-      sfCount(sfCreds, "SELECT COUNT() FROM Opportunity WHERE IsWon = true AND IsClosed = true"),
+      sfCount(sfCreds, 'SELECT COUNT() FROM Opportunity WHERE IsWon = true AND IsClosed = true'),
     ])
     type P = { lastActivityAt?: string }
     const prospects = pardotCreds
